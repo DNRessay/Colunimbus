@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ERPNext invoices — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>ERPNext invoices</h1>
+    <div id="msg"></div>
+    <div class="card row">
+      <input id="month" type="month" />
+      <button id="btn-sync">Sync month from ERPNext</button>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div class="card row">
+      <select id="status"><option value="">Any status</option><option>Unpaid</option><option>Partly Paid</option><option>Overdue</option><option>Paid</option><option>Draft</option><option>Cancelled</option></select>
+      <input id="q" class="grow" type="search" placeholder="Search party, invoice or bill number" />
+    </div>
+    <div class="card table-wrap"><table>
+      <thead><tr><th>Invoice</th><th>Type</th><th>Party</th><th>Posted</th><th>Due</th><th class="num">Total</th><th class="num">Outstanding</th><th>Status</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, $$, action, badge, empty, esc, flash, money, page } from "/js/ui.js";
+    page();
+
+    let type = "";
+    const now = new Date();
+    $("#month").value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+    async function tabs() {
+      const c = await api.erpInvoiceCounts();
+      $("#tabs").innerHTML = [["", `All (${c.all})`], ["sales", `Sales (${c.sales})`], ["purchase", `Purchase (${c.purchase})`]]
+        .map(([v, l]) => `<button class="secondary small ${v === type ? "active" : ""}" data-t="${v}">${l}</button>`).join("") +
+        `<span class="muted" style="align-self:center">${c.unpaid} unpaid · ${c.overdue} overdue</span>`;
+      $$("#tabs button").forEach(b => b.addEventListener("click", () => { type = b.dataset.t; tabs(); load(); }));
+    }
+
+    async function load() {
+      const rows = await api.erpInvoices({ invoice_type: type, status: $("#status").value, q: $("#q").value });
+      const kind = (i) => i.is_paid ? "ok" : i.is_overdue || i.erp_status === "Overdue" ? "err" : "warn";
+      $("#rows").innerHTML = rows.map(i => `<tr>
+        <td>${esc(i.erp_name)}${i.bill_no ? `<br><small class="muted">Bill ${esc(i.bill_no)}</small>` : ""}</td>
+        <td>${esc(i.invoice_type)}</td><td>${esc(i.party_name)}</td><td>${i.posting_date}</td><td>${i.due_date || ""}</td>
+        <td class="num">${money(i.grand_total)}</td><td class="num">${money(i.outstanding_amount)}</td>
+        <td>${badge(i.erp_status, kind(i))}</td></tr>`).join("") || empty(8, "No invoices. Sync a month from ERPNext.");
+    }
+
+    action($("#btn-sync"), async () => {
+      const [y, m] = $("#month").value.split("-").map(Number);
+      flash((await api.syncErpInvoices(y, m)).message);
+      tabs(); load();
+    });
+    $("#status").addEventListener("change", load);
+    let t;
+    $("#q").addEventListener("input", () => { clearTimeout(t); t = setTimeout(load, 300); });
+    Promise.all([tabs(), load()]).catch(e => flash(e.message, "err"));
+  </script>
+</body>
+</html>

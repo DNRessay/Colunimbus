@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <script type="module">
+    import { tokens } from "/js/api.js";
+    location.replace(tokens.isLoggedIn() ? "/dashboard.html" : "/login.html");
+  </script>
+</head>
+<body></body>
+</html>

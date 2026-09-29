@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Log in — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <main class="narrow">
+    <div class="card">
+      <h1>Log in</h1>
+      <div id="msg"></div>
+      <form id="form">
+        <div class="field"><label for="username">Username or email</label><input id="username" name="username" required autocomplete="username" /></div>
+        <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" required autocomplete="current-password" /></div>
+        <button type="submit" style="width:100%">Log in</button>
+      </form>
+      <div id="social" class="social"></div>
+      <p class="muted" style="font-size:0.85rem">No account? <a href="/register.html">Register</a> · <a href="/reset-password.html">Forgot password?</a></p>
+    </div>
+  </main>
+  <script type="module">
+    import { api, tokens } from "/js/api.js";
+    import { $, flash, guestPage, onSubmit, param } from "/js/ui.js";
+    guestPage();
+
+    const errors = { invalid_state: "Login link expired, try again.", oauth_failed: "Social login failed.", no_email: "Your provider didn't share an email address.", inactive: "Account disabled." };
+    if (param("error")) flash(errors[param("error")] || "Login failed.", "err");
+
+    onSubmit($("#form"), async (d) => {
+      try {
+        const r = await api.login(d.username, d.password);
+        tokens.set(r.access, r.refresh);
+        location.href = "/dashboard.html";
+      } catch (e) { flash(e.message, "err"); }
+    });
+
+    const names = { google: "Google", github: "GitHub", facebook: "Facebook" };
+    api.socialProviders().then(({ providers }) => {
+      $("#social").innerHTML = providers.map(p => `<a class="btn" href="${api.socialLoginUrl(p)}">Continue with ${names[p]}</a>`).join("");
+    }).catch(() => {});
+  </script>
+</body>
+</html>

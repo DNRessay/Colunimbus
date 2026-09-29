@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Categories — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>Categories</h1>
+    <div id="msg"></div>
+    <div class="card">
+      <h3>Bulk actions</h3>
+      <div class="row">
+        <button id="btn-auto">Auto-categorize (keywords)</button>
+        <button id="btn-ai" class="secondary">AI categorize (Groq)</button>
+        <button id="btn-preview" class="secondary">Preview</button>
+        <button id="btn-sync" class="secondary">Sync ready to ERPNext</button>
+      </div>
+      <div id="stats" class="grid" style="margin-top:1rem"></div>
+      <div id="preview"></div>
+    </div>
+
+    <div class="card">
+      <h3>Test the classifier</h3>
+      <form id="classify" class="row">
+        <input name="transaction" class="grow" placeholder="e.g. CHECKERS HYPER SANDTON" required />
+        <button type="submit" class="secondary">Classify</button>
+      </form>
+      <div id="classify-result" class="muted" style="margin-top:0.5rem"></div>
+    </div>
+
+    <div class="card table-wrap">
+      <table>
+        <thead><tr><th>Category</th><th>Type</th><th>ERPNext account</th><th class="num">Total</th><th class="num">Synced</th><th class="num">Pending</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <details class="card">
+      <summary>Add a category</summary>
+      <form id="add" style="margin-top:1rem">
+        <div class="fields">
+          <div class="field"><label>Name</label><input name="name" required /></div>
+          <div class="field"><label>Type</label><select name="transaction_type"><option value="debit">debit (expense)</option><option value="credit">credit (income)</option></select></div>
+          <div class="field"><label>ERPNext account</label><input name="erpnext_account" placeholder="Groceries - ABC" /></div>
+        </div>
+        <div class="field"><label>Keywords (comma-separated)</label><input name="keywords" /></div>
+        <button type="submit">Add</button>
+      </form>
+    </details>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, $$, action, badge, empty, esc, flash, onSubmit, page, poll } from "/js/ui.js";
+    page();
+
+    async function load() {
+      const [{ categories }, bulk] = await Promise.all([api.categoryStats(), api.bulkStats()]);
+      $("#rows").innerHTML = categories.map(({ category: c, total, synced, pending, is_junk }) => `
+        <tr>
+          <td><a href="/category.html?id=${c.id}">${esc(c.name)}</a> ${is_junk ? badge("junk", "warn") : ""} ${c.active ? "" : badge("inactive")}</td>
+          <td>${esc(c.transaction_type)}</td>
+          <td><input class="acct" data-id="${c.id}" value="${esc(c.erpnext_account || "")}" placeholder="Account - ABBR" /></td>
+          <td class="num">${total}</td><td class="num">${synced}</td><td class="num">${pending}</td>
+          <td>${total === 0 ? `<button class="secondary small del" data-id="${c.id}">Delete</button>` : ""}</td>
+        </tr>`).join("") || empty(7, "No categories yet. Run `python -m app.cli seed-categories` on the backend.");
+
+      $$(".acct").forEach(inp => inp.addEventListener("change", async () => {
+        try { await api.updateCategory(inp.dataset.id, { erpnext_account: inp.value.trim() || null }); flash("ERPNext account saved."); }
+        catch (e) { flash(e.message, "err"); }
+      }));
+      $$(".del").forEach(b => b.addEventListener("click", async () => {
+        if (!confirm("Delete this category?")) return;
+        try { await api.deleteCategory(b.dataset.id); load(); } catch (e) { flash(e.message, "err"); }
+      }));
+
+      const s = bulk.stats;
+      const stat = (label, v) => `<div class="stat"><div class="value">${v}</div><div class="label">${label}</div></div>`;
+      $("#stats").innerHTML = stat("Total", s.total) + stat("Needs categorizing", s.uncategorized) +
+        stat("Categorized", s.categorized) + stat("Ready to sync", s.ready_to_sync) + stat("Synced", s.synced);
+      $("#btn-ai").hidden = !bulk.ai_enabled;
+    }
+
+    action($("#btn-auto"), async () => {
+      const r = await api.autoCategorize();
+      flash(`Categorized ${r.categorized} of ${r.total}.`);
+      load();
+    });
+    action($("#btn-ai"), async () => {
+      const { job_id } = await api.autoCategorizeAI();
+      flash("AI categorization running…", "warn");
+      const job = await poll(() => api.job(job_id), j => j.status === "completed");
+      flash(job.message, job.conclusion === "success" ? "ok" : "err");
+      load();
+    });
+    action($("#btn-preview"), async () => {
+      const r = await api.previewCategorization();
+      $("#preview").innerHTML = `<p>${r.will_be_categorized} of ${r.total_uncategorized} would be categorized, ${r.no_match} have no match.</p>` +
+        (r.matches.length ? `<div class="table-wrap"><table><thead><tr><th>Description</th><th>Category</th><th>Keyword</th></tr></thead><tbody>` +
+          r.matches.map(m => `<tr><td>${esc(m.description)}</td><td>${esc(m.category)}</td><td>${esc(m.keyword || "")}</td></tr>`).join("") + `</tbody></table></div>` : "");
+    });
+    action($("#btn-sync"), async () => {
+      flash((await api.bulkSync()).message);
+      load();
+    });
+    onSubmit($("#classify"), async (d) => {
+      const r = await api.classify(d.transaction);
+      $("#classify-result").textContent = `${r.category} — ${r.confidence} confidence via ${r.method}${r.clue_detected ? ` (clue: ${r.clue_detected})` : ""}`;
+    });
+    onSubmit($("#add"), async (d, e) => {
+      if (!d.erpnext_account) delete d.erpnext_account;
+      await api.createCategory(d);
+      e.target.reset();
+      flash("Category added.");
+      load();
+    });
+
+    load().catch(e => flash(e.message, "err"));
+  </script>
+</body>
+</html>

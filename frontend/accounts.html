@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bank accounts — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>Bank accounts</h1>
+    <p class="muted">Map each bank account to its ERPNext account (e.g. <code>Capitec Savings - ABC</code>) so synced journal entries hit the right ledger.</p>
+    <div id="msg"></div>
+    <div class="card table-wrap"><table>
+      <thead><tr><th>Name</th><th>Bank</th><th>Number</th><th>ERPNext account</th><th>Active</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <div class="card">
+      <h3>Add account</h3>
+      <form id="add">
+        <div class="fields">
+          <div class="field"><label>Account name</label><input name="account_name" required /></div>
+          <div class="field"><label>Bank</label><select name="bank_name"><option>capitec</option><option>tymebank</option><option>gotyme</option><option>other</option></select></div>
+          <div class="field"><label>Account number</label><input name="account_number" /></div>
+          <div class="field"><label>Type</label><input name="account_type" placeholder="savings / cheque" /></div>
+          <div class="field"><label>ERPNext account</label><input name="erpnext_account" /></div>
+        </div>
+        <button type="submit">Add</button>
+      </form>
+    </div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, $$, empty, esc, flash, onSubmit, page } from "/js/ui.js";
+    page();
+
+    async function load() {
+      const rows = await api.accounts();
+      $("#rows").innerHTML = rows.map(a => `<tr>
+        <td>${esc(a.account_name)}</td><td>${esc(a.bank_name)}</td><td>${esc(a.account_number)}</td>
+        <td><input class="erp" data-id="${a.id}" value="${esc(a.erpnext_account)}" /></td>
+        <td><input type="checkbox" class="active" data-id="${a.id}" ${a.is_active ? "checked" : ""} /></td>
+        <td><button class="secondary small del" data-id="${a.id}">Delete</button></td></tr>`).join("") || empty(6, "No bank accounts yet.");
+      $$(".erp").forEach(i => i.addEventListener("change", () => save(i.dataset.id, { erpnext_account: i.value.trim() })));
+      $$(".active").forEach(i => i.addEventListener("change", () => save(i.dataset.id, { is_active: i.checked })));
+      $$(".del").forEach(b => b.addEventListener("click", async () => {
+        if (!confirm("Delete this account? Its transactions are kept but unlinked.")) return;
+        try { await api.deleteAccount(b.dataset.id); load(); } catch (e) { flash(e.message, "err"); }
+      }));
+    }
+    async function save(id, body) {
+      try { await api.updateAccount(id, body); flash("Saved."); } catch (e) { flash(e.message, "err"); }
+    }
+    onSubmit($("#add"), async (d, e) => {
+      await api.createAccount(d);
+      e.target.reset();
+      flash("Account added.");
+      load();
+    });
+    load().catch(e => flash(e.message, "err"));
+  </script>
+</body>
+</html>

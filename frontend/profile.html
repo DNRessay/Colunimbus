@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Profile — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>Profile</h1>
+    <div id="msg"></div>
+    <div class="card">
+      <h3 id="who"></h3>
+      <form id="profile">
+        <div class="fields">
+          <div class="field"><label>Phone</label><input name="phone" /></div>
+          <div class="field"><label>Date of birth</label><input name="date_of_birth" type="date" /></div>
+          <div class="field"><label>ID number</label><input name="id_number" /></div>
+          <div class="field"><label>City</label><input name="city" /></div>
+          <div class="field"><label>Province</label><input name="province" /></div>
+          <div class="field"><label>Country</label><input name="country" /></div>
+          <div class="field"><label>Occupation</label><input name="occupation" /></div>
+          <div class="field"><label>Industry</label><input name="industry" /></div>
+          <div class="field"><label>Experience</label><select name="years_experience">
+            <option value="">Select…</option><option value="0-1">Less than 1 year</option><option value="1-2">1–2 years</option>
+            <option value="3-5">3–5 years</option><option value="5-10">5–10 years</option><option value="10+">10+ years</option></select></div>
+          <div class="field"><label>LinkedIn URL</label><input name="linkedin_url" type="url" /></div>
+          <div class="field"><label>GitHub URL</label><input name="github_url" type="url" /></div>
+          <div class="field"><label>Portfolio URL</label><input name="portfolio_url" type="url" /></div>
+        </div>
+        <button type="submit">Save</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Links</h3>
+      <div id="links"></div>
+      <form id="add-link" class="row" style="margin-top:0.8rem">
+        <input name="platform" placeholder="Platform" required list="platforms" />
+        <input name="url" class="grow" placeholder="URL" required />
+        <button type="submit" class="secondary">Add</button>
+      </form>
+      <datalist id="platforms"><option>LinkedIn</option><option>GitHub</option><option>Portfolio</option><option>Twitter / X</option><option>Instagram</option><option>YouTube</option><option>Medium</option></datalist>
+    </div>
+
+    <div class="card">
+      <h3>Change password</h3>
+      <form id="password">
+        <div class="field"><label>Current password</label><input name="old_password" type="password" required autocomplete="current-password" /></div>
+        <div class="field"><label>New password</label><input name="new_password1" type="password" required minlength="8" autocomplete="new-password" /></div>
+        <div class="field"><label>Confirm new password</label><input name="new_password2" type="password" required minlength="8" autocomplete="new-password" /></div>
+        <button type="submit">Change password</button>
+      </form>
+    </div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, $$, esc, flash, onSubmit, page } from "/js/ui.js";
+    page();
+    const form = $("#profile");
+
+    async function loadLinks() {
+      const links = await api.links();
+      $("#links").innerHTML = links.map(l => `<div class="row">${l.icon} <strong>${esc(l.platform)}</strong>
+        <a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.url)}</a>
+        <button class="secondary small del" data-id="${l.id}">Remove</button></div>`).join("") || `<p class="muted">No links yet.</p>`;
+      $$(".del").forEach(b => b.addEventListener("click", async () => { await api.deleteLink(b.dataset.id); loadLinks(); }));
+    }
+
+    Promise.all([api.me(), api.profile()]).then(([me, p]) => {
+      $("#who").textContent = `${me.first_name} ${me.last_name} · ${me.username} · ${me.email}`;
+      for (const [k, v] of Object.entries(p)) if (form.elements[k]) form.elements[k].value = v ?? "";
+    }).catch(e => flash(e.message, "err"));
+    loadLinks().catch(() => {});
+
+    onSubmit(form, async (d) => { await api.updateProfile({ ...d, date_of_birth: d.date_of_birth || null }); flash("Profile updated."); });
+    onSubmit($("#add-link"), async (d, e) => { await api.addLink(d); e.target.reset(); loadLinks(); });
+    onSubmit($("#password"), async (d, e) => { flash((await api.changePassword(d)).message); e.target.reset(); });
+  </script>
+</body>
+</html>
