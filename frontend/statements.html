@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Statements — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>Statements</h1>
+    <p class="muted">From Gmail or uploads — see <a href="/gmail.html">Import</a> to add more. Gmail statements need parsing to pull out transactions.</p>
+    <div id="msg"></div>
+    <div class="card table-wrap"><table>
+      <thead><tr><th>Statement</th><th>Bank</th><th>Received</th><th>State</th><th class="num">Txns</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $$, $, badge, day, empty, esc, flash, page } from "/js/ui.js";
+    page();
+
+    const stateBadge = (s) => badge(s.state, s.state === "parsed" ? "ok" : s.state === "error" ? "err" : "");
+    const fromGmail = (s) => !s.gmail_id.startsWith("upload-") && !s.gmail_id.startsWith("CSV-") && !s.gmail_id.startsWith("pdf-upload-");
+
+    async function load() {
+      const rows = await api.statements();
+      $("#rows").innerHTML = rows.map(s => `<tr>
+        <td>${esc(s.subject || s.gmail_id)}<br><small class="muted">${esc(s.sender)}</small>${s.error_message ? `<br><small class="muted">${esc(s.error_message)}</small>` : ""}</td>
+        <td>${esc(s.bank_name)}</td><td>${day(s.received_date)}</td><td>${stateBadge(s)}</td><td class="num">${s.transaction_count}</td>
+        <td class="row">
+          ${fromGmail(s) && s.has_pdf ? `<button class="small parse" data-id="${s.id}">Parse PDF</button><button class="secondary small csv" data-id="${s.id}">Parse CSV</button>` : ""}
+          <button class="secondary small del" data-id="${s.id}">Delete</button>
+        </td></tr>`).join("") || empty(6, "No statements yet.");
+
+      $$(".parse").forEach(b => b.addEventListener("click", async () => {
+        const pdf_password = prompt("PDF password (leave blank if none / already saved):") ?? null;
+        if (pdf_password === null) return;
+        const save_password = !!pdf_password && confirm("Save this password for next time?");
+        b.disabled = true;
+        try { flash((await api.parseStatement(b.dataset.id, { pdf_password, save_password })).message); load(); }
+        catch (e) { flash(e.message, "err"); b.disabled = false; }
+      }));
+      $$(".csv").forEach(b => b.addEventListener("click", async () => {
+        b.disabled = true;
+        try { flash((await api.parseCsvStatement(b.dataset.id)).message); load(); }
+        catch (e) { flash(e.message, "err"); b.disabled = false; }
+      }));
+      $$(".del").forEach(b => b.addEventListener("click", async () => {
+        if (!confirm("Delete this statement? Its transactions are kept.")) return;
+        try { await api.deleteStatement(b.dataset.id); load(); } catch (e) { flash(e.message, "err"); }
+      }));
+    }
+    load().catch(e => flash(e.message, "err"));
+  </script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboard — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>Dashboard</h1>
+    <div id="msg"></div>
+    <div id="stats" class="grid"></div>
+    <h2>Recent statements</h2>
+    <div class="card table-wrap"><table>
+      <thead><tr><th>Statement</th><th>Bank</th><th>Received</th><th>State</th></tr></thead>
+      <tbody id="statements"></tbody>
+    </table></div>
+    <h2>Recent transactions</h2>
+    <div class="card table-wrap"><table>
+      <thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="num">Amount</th><th>ERPNext</th></tr></thead>
+      <tbody id="transactions"></tbody>
+    </table></div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, amountCell, day, empty, esc, flash, page, syncBadge } from "/js/ui.js";
+    page();
+    const stat = (label, value) => `<div class="card stat"><div class="value">${value}</div><div class="label">${label}</div></div>`;
+    try {
+      const d = await api.dashboard();
+      $("#stats").innerHTML = stat("Statements", d.stats.statements) + stat("Transactions", d.stats.transactions) +
+        stat("Categorized", d.stats.categorized) + stat("Synced to ERPNext", d.stats.synced);
+      $("#statements").innerHTML = d.recent_statements.map(s => `<tr><td>${esc(s.subject || s.gmail_id)}</td><td>${esc(s.bank_name)}</td><td>${day(s.received_date)}</td><td>${esc(s.state)}</td></tr>`).join("") || empty(4, "No statements yet — import some from the Import page.");
+      $("#transactions").innerHTML = d.recent_transactions.map(t => `<tr><td>${t.date}</td><td>${esc(t.description)}</td><td>${esc(t.category_name || "—")}</td>${amountCell(t)}<td>${syncBadge(t)}</td></tr>`).join("") || empty(5, "No transactions yet.");
+    } catch (e) { flash(e.message, "err"); }
+  </script>
+</body>
+</html>

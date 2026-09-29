@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ERPNext — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>ERPNext</h1>
+    <div id="msg"></div>
+
+    <div class="card table-wrap">
+      <h3>Connections</h3>
+      <table>
+        <thead><tr><th>Name</th><th>URL</th><th>Company</th><th>Bank account</th><th>Last sync</th><th></th></tr></thead>
+        <tbody id="configs"></tbody>
+      </table>
+    </div>
+
+    <details class="card">
+      <summary>Add connection</summary>
+      <form id="add" style="margin-top:1rem">
+        <div class="fields">
+          <div class="field"><label>Name</label><input name="name" required /></div>
+          <div class="field"><label>ERPNext URL</label><input name="base_url" type="url" required placeholder="https://your-site.erpnext.com" /></div>
+          <div class="field"><label>API key</label><input name="api_key" required autocomplete="off" /></div>
+          <div class="field"><label>API secret</label><input name="api_secret" type="password" required autocomplete="off" /></div>
+        </div>
+        <button type="submit">Save</button>
+      </form>
+    </details>
+
+    <div class="card" id="defaults-card" hidden>
+      <h3>Defaults for the active connection</h3>
+      <form id="defaults">
+        <div class="fields">
+          <div class="field"><label>Company</label><select name="company" required></select></div>
+          <div class="field"><label>Default bank account</label><select name="bank_account"></select></div>
+          <div class="field"><label>Cost center</label><select name="cost_center"></select></div>
+        </div>
+        <div class="row"><button type="submit">Save defaults</button><button type="button" id="btn-load-erp" class="secondary">Load lists from ERPNext</button></div>
+      </form>
+    </div>
+
+    <div class="card" id="preflight-card" hidden>
+      <h3>Sync preflight</h3>
+      <p class="muted">Every category and bank account needs a full ERPNext account name (<code>Name - ABBR</code>) before its transactions can be posted.</p>
+      <div id="preflight"></div>
+      <div class="row" style="margin-top:1rem">
+        <button id="btn-refresh-pre" class="secondary">Refresh</button>
+        <button id="btn-quick" class="secondary">Quick sync now</button>
+      </div>
+      <div id="job" style="margin-top:1rem"></div>
+    </div>
+
+    <h2>Recent sync log</h2>
+    <div class="card table-wrap"><table>
+      <thead><tr><th>When</th><th>Record</th><th>Document</th><th>Status</th><th>Error</th></tr></thead>
+      <tbody id="logs"></tbody>
+    </table></div>
+  </main>
+  <datalist id="erp-accounts"></datalist>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, $$, action, badge, day, empty, esc, flash, onSubmit, page, poll } from "/js/ui.js";
+    page();
+
+    let active = null;
+    const opt = (v, label, sel) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""}>${esc(label)}</option>`;
+
+    async function loadConfigs() {
+      const rows = await api.erpnextConfigs();
+      active = rows.find(c => c.is_active) || null;
+      $("#configs").innerHTML = rows.map(c => `<tr>
+        <td>${esc(c.name)} ${c.is_active ? badge("active", "ok") : ""}</td><td>${esc(c.base_url)}</td>
+        <td>${esc(c.default_company)}</td><td>${esc(c.bank_account)}</td><td>${day(c.last_sync)}</td>
+        <td class="row">
+          <button class="secondary small test" data-id="${c.id}">Test</button>
+          ${c.is_active ? "" : `<button class="secondary small activate" data-id="${c.id}">Activate</button>`}
+          <button class="secondary small del" data-id="${c.id}">Delete</button>
+        </td></tr>`).join("") || empty(6, "No ERPNext connection yet.");
+      $$(".test").forEach(b => action(b, async () => { const r = await api.testConfig(b.dataset.id); flash(r.message, r.success ? "ok" : "err"); }));
+      $$(".activate").forEach(b => action(b, async () => { flash((await api.activateConfig(b.dataset.id)).message); init(); }));
+      $$(".del").forEach(b => action(b, async () => { if (confirm("Delete this connection?")) { await api.deleteErpnextConfig(b.dataset.id); init(); } }));
+
+      $("#defaults-card").hidden = $("#preflight-card").hidden = !active;
+      if (active) {
+        const f = $("#defaults");
+        f.company.innerHTML = opt(active.default_company, active.default_company || "— load from ERPNext —", active.default_company);
+        f.bank_account.innerHTML = opt(active.bank_account, active.bank_account || "—", active.bank_account);
+        f.cost_center.innerHTML = opt(active.default_cost_center, active.default_cost_center || "—", active.default_cost_center);
+      }
+    }
+
+    async function loadErpLists() {
+      const f = $("#defaults");
+      const [{ companies }, { accounts }, { cost_centers }] = await Promise.all([api.erpCompanies(), api.erpAccounts(), api.erpCostCenters()]);
+      f.company.innerHTML = companies.map(c => opt(c.name, `${c.name} (${c.abbr})`, active.default_company)).join("");
+      const leaf = accounts.filter(a => !a.is_group);
+      const banks = leaf.filter(a => ["Bank", "Cash"].includes(a.account_type));
+      f.bank_account.innerHTML = opt("", "—") + banks.map(a => opt(a.name, a.name, active.bank_account)).join("");
+      f.cost_center.innerHTML = opt("", "—") + cost_centers.map(c => opt(c.name, c.name, active.default_cost_center)).join("");
+      $("#erp-accounts").innerHTML = leaf.map(a => `<option value="${esc(a.name)}">${esc(a.root_type)}</option>`).join("");
+      flash(`Loaded ${companies.length} companies, ${leaf.length} accounts.`);
+    }
+
+    async function loadPreflight() {
+      const d = await api.preflight();
+      const input = (name, val) => `<input name="${name}" list="erp-accounts" value="${esc(val || "")}" placeholder="Account - ABBR" />`;
+      const cats = d.missing_categories.map(c => `<tr><td>${esc(c.name)}</td><td>${input(`account_${c.id}`, c.erpnext_account)}</td></tr>`).join("");
+      const banks = d.missing_bank_accounts.map(b => `<tr><td>${esc(b.account_name)}</td><td>${input(`bank_erpnext_${b.id}`, b.erpnext_account)}</td></tr>`).join("");
+      $("#preflight").innerHTML = `
+        <p><strong>${d.ready_count}</strong> transaction(s) ready to sync ·
+           ${d.missing_categories.length} categor${d.missing_categories.length === 1 ? "y" : "ies"} and ${d.missing_bank_accounts.length} bank account(s) need an ERPNext account.</p>
+        <form id="pre-form">
+          ${cats || banks ? `<div class="table-wrap"><table><thead><tr><th>Category / bank account</th><th>ERPNext account</th></tr></thead><tbody>${banks}${cats}</tbody></table></div>` : ""}
+          <button type="submit" style="margin-top:1rem">Save &amp; run full sync</button>
+        </form>`;
+      onSubmit($("#pre-form"), async (data) => {
+        const r = await api.submitPreflight(data);
+        flash(r.message, "warn");
+        await watchJob(r.job_id);
+      });
+    }
+
+    async function watchJob(jobId) {
+      const out = $("#job");
+      const job = await poll(() => (jobId ? api.job(jobId) : api.syncJobStatus()), j => j.status === "completed" || j.status === "no_runs",
+        j => { out.innerHTML = `<div class="msg warn">Sync ${esc(j.status)}… ${esc(j.message || "")}</div>`; }, 3000);
+      if (job.status === "no_runs") { out.innerHTML = ""; return; }
+      const notes = job.result?.notes?.length ? `<ul>${job.result.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "";
+      out.innerHTML = `<div class="msg ${job.conclusion === "success" ? "ok" : "err"}">${esc(job.message)}${notes}</div>`;
+      loadPreflight(); loadLogs(); loadConfigs();
+    }
+
+    async function loadLogs() {
+      const logs = await api.syncLogs();
+      $("#logs").innerHTML = logs.map(l => `<tr><td>${String(l.sync_date).replace("T", " ").slice(0, 16)}</td><td>${esc(l.record_type)} #${l.record_id}</td>
+        <td>${esc(l.erpnext_doc_name)}</td><td>${badge(l.status, l.status === "success" ? "ok" : "err")}</td><td><small>${esc(l.error_message)}</small></td></tr>`).join("") || empty(5, "Nothing synced yet.");
+    }
+
+    onSubmit($("#add"), async (d, e) => { await api.createErpnextConfig(d); e.target.reset(); flash("Connection saved and activated."); init(); });
+    onSubmit($("#defaults"), async (d) => { flash((await api.updateErpDefaults(d)).message); loadConfigs(); });
+    action($("#btn-load-erp"), loadErpLists);
+    action($("#btn-refresh-pre"), loadPreflight);
+    action($("#btn-quick"), async () => { const r = await api.syncNow(); flash(`Synced ${r.success}, failed ${r.failed} of ${r.total}.`, r.failed ? "warn" : "ok"); loadPreflight(); loadLogs(); });
+
+    async function init() {
+      await loadConfigs();
+      loadLogs().catch(() => {});
+      if (active) {
+        await loadPreflight();
+        const last = await api.syncJobStatus();
+        if (last.status && !["completed", "no_runs"].includes(last.status)) watchJob(last.job_id);
+      }
+    }
+    init().catch(e => flash(e.message, "err"));
+  </script>
+</body>
+</html>

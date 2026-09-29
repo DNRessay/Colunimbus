@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Transactions — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>Transactions</h1>
+    <div id="msg"></div>
+    <div class="card row">
+      <select id="filter">
+        <option value="">All</option>
+        <option value="uncategorized">Uncategorized</option>
+        <option value="not_synced">Not synced</option>
+      </select>
+      <select id="account"><option value="">All accounts</option></select>
+      <input id="q" class="grow" type="search" placeholder="Search description" />
+    </div>
+    <div class="card table-wrap"><table>
+      <thead><tr><th>Date</th><th>Description</th><th class="num">Amount</th><th>Category</th><th>Account</th><th>ERPNext</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <p class="muted" id="count"></p>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, $$, amountCell, empty, esc, flash, page, syncBadge } from "/js/ui.js";
+    page();
+
+    let categories = [], accounts = [];
+    const options = (list, selected, label) => `<option value="">— none —</option>` +
+      list.map(x => `<option value="${x.id}" ${x.id === selected ? "selected" : ""}>${esc(label(x))}</option>`).join("");
+
+    async function load() {
+      const f = $("#filter").value;
+      const params = { q: $("#q").value, bank_account: $("#account").value, limit: 1000 };
+      if (f) params[f] = 1;
+      const rows = await api.transactions(params);
+      $("#count").textContent = `${rows.length} transaction(s)${rows.length === 1000 ? " (showing first 1000)" : ""}`;
+      $("#rows").innerHTML = rows.map(t => `
+        <tr>
+          <td>${t.date}</td>
+          <td>${esc(t.description)}${t.erpnext_error ? `<br><small class="muted">${esc(t.erpnext_error)}</small>` : ""}</td>
+          ${amountCell(t)}
+          <td><select class="cat" data-id="${t.id}" ${t.erpnext_synced ? "disabled" : ""}>${options(categories, t.category, c => c.name)}</select></td>
+          <td><select class="acct" data-id="${t.id}" ${t.erpnext_synced ? "disabled" : ""}>${options(accounts, t.bank_account, a => a.account_name)}</select></td>
+          <td>${syncBadge(t)}</td>
+          <td>${!t.erpnext_synced && t.category ? `<button class="secondary small sync" data-id="${t.id}">Sync</button>` : ""}</td>
+        </tr>`).join("") || empty(7, "No transactions found.");
+
+      $$(".cat").forEach(sel => sel.addEventListener("change", async () => {
+        try {
+          if (sel.value) await api.categorize(sel.dataset.id, Number(sel.value));
+          else await api.uncategorize(sel.dataset.id);
+          flash("Saved.");
+        } catch (e) { flash(e.message, "err"); }
+      }));
+      $$(".acct").forEach(sel => sel.addEventListener("change", async () => {
+        try { await api.updateTransaction(sel.dataset.id, { bank_account: sel.value ? Number(sel.value) : null }); flash("Saved."); }
+        catch (e) { flash(e.message, "err"); }
+      }));
+      $$(".sync").forEach(btn => btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try { flash((await api.syncTransaction(btn.dataset.id)).message); load(); }
+        catch (e) { flash(e.message, "err"); btn.disabled = false; }
+      }));
+    }
+
+    try {
+      [categories, accounts] = await Promise.all([api.categories(), api.accounts()]);
+      $("#account").innerHTML += accounts.map(a => `<option value="${a.id}">${esc(a.account_name)}</option>`).join("");
+      await load();
+    } catch (e) { flash(e.message, "err"); }
+    $("#filter").addEventListener("change", load);
+    $("#account").addEventListener("change", load);
+    let timer;
+    $("#q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(load, 300); });
+  </script>
+</body>
+</html>

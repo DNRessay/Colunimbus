@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reconciliation — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>Reconciliation</h1>
+    <p class="muted">Match bank transactions against ERPNext journal entries month by month, then close the period.</p>
+    <div id="msg"></div>
+    <div class="card row">
+      <select id="month"></select>
+      <button id="btn-fetch" class="secondary">1. Fetch journal entries</button>
+      <button id="btn-match">2. Auto-match</button>
+      <button id="btn-close" class="secondary">3. Close period</button>
+      <button id="btn-reopen" class="secondary" hidden>Reopen</button>
+      <button id="btn-export" class="secondary">Export CSV</button>
+    </div>
+    <div id="stats" class="grid"></div>
+    <div class="tabs" id="filters" style="margin-top:1rem"></div>
+    <div class="card table-wrap"><table>
+      <thead><tr><th>Date</th><th>Description</th><th class="num">Amount</th><th>Status</th><th>Journal entry</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, $$, action, amountCell, badge, download, empty, esc, flash, money, page } from "/js/ui.js";
+    page();
+
+    const NAMES = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let status = "", entries = [];
+    const ym = () => $("#month").value.split("-").map(Number);
+
+    async function months() {
+      const { months } = await api.reconMonths();
+      const now = new Date();
+      const list = months.length ? months : [{ year: now.getFullYear(), month: now.getMonth() + 1, count: 0 }];
+      $("#month").innerHTML = list.map(m => `<option value="${m.year}-${m.month}">${NAMES[m.month]} ${m.year} (${m.count})</option>`).join("");
+    }
+
+    async function load() {
+      const [y, m] = ym();
+      const d = await api.reconMonth(y, m, status);
+      const p = d.period;
+      entries = d.journal_entries;
+      const closed = p.status === "closed";
+      const stat = (l, v) => `<div class="card stat"><div class="value">${v}</div><div class="label">${l}</div></div>`;
+      $("#stats").innerHTML = stat("Status", closed ? "Closed" : "Open") + stat("Transactions", p.total_transactions) +
+        stat("Matched", p.matched_count) + stat("Flagged", p.flagged_count) + stat("Unreconciled", p.unreconciled_count) +
+        stat("Journal entries", entries.length);
+      $("#btn-close").hidden = closed; $("#btn-reopen").hidden = !closed;
+      $("#btn-match").disabled = $("#btn-fetch").disabled = closed;
+
+      $("#filters").innerHTML = [["", "All"], ["unreconciled", "Unreconciled"], ["flagged", "Flagged"], ["matched", "Matched"]]
+        .map(([v, l]) => `<button class="secondary small ${v === status ? "active" : ""}" data-s="${v}">${l}</button>`).join("");
+      $$("#filters button").forEach(b => b.addEventListener("click", () => { status = b.dataset.s; load(); }));
+
+      const kinds = { matched: "ok", flagged: "err", unreconciled: "warn" };
+      const jeOptions = `<option value="">Match to…</option>` + entries.map(j => `<option value="${j.id}">${esc(j.je_name)} · ${j.posting_date} · ${money(j.amount)}</option>`).join("");
+      $("#rows").innerHTML = d.transactions.map(t => `<tr>
+        <td>${t.date}</td><td>${esc(t.description)}${t.match?.flag_reason ? `<br><small class="muted">${esc(t.match.flag_reason)}</small>` : ""}</td>
+        ${amountCell(t)}<td>${badge(t.recon_status, kinds[t.recon_status])}</td>
+        <td>${esc(t.journal_entry_name)}</td>
+        <td class="row">${closed ? "" : t.recon_status === "matched"
+          ? `<button class="secondary small unmatch" data-id="${t.id}">Unmatch</button>`
+          : entries.length ? `<select class="je" data-id="${t.id}">${jeOptions}</select>` : ""}</td></tr>`).join("") || empty(6, "No transactions for this filter.");
+
+      $$(".unmatch").forEach(b => b.addEventListener("click", async () => {
+        try { await api.unmatch(b.dataset.id); load(); } catch (e) { flash(e.message, "err"); }
+      }));
+      $$(".je").forEach(s => s.addEventListener("change", async () => {
+        if (!s.value) return;
+        try { await api.manualMatch(s.dataset.id, Number(s.value)); flash("Matched."); load(); } catch (e) { flash(e.message, "err"); }
+      }));
+    }
+
+    action($("#btn-fetch"), async () => { flash((await api.reconFetch(...ym())).message); load(); });
+    action($("#btn-match"), async () => { flash((await api.reconMatch(...ym())).message); load(); });
+    action($("#btn-close"), async () => { await api.reconClose(...ym()); flash("Period closed."); load(); });
+    action($("#btn-reopen"), async () => { await api.reconReopen(...ym()); flash("Period reopened."); load(); });
+    action($("#btn-export"), async () => { const [y, m] = ym(); await download(api.reconExport(y, m), `recon_${y}_${String(m).padStart(2, "0")}.csv`); });
+    $("#month").addEventListener("change", () => { status = ""; load(); });
+
+    months().then(load).catch(e => flash(e.message, "err"));
+  </script>
+</body>
+</html>

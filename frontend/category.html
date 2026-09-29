@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Category — L-Suite</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <p><a href="/categories.html">&larr; Categories</a></p>
+    <h1 id="title">Category</h1>
+    <div id="msg"></div>
+    <form id="edit" class="card">
+      <div class="fields">
+        <div class="field"><label>Name</label><input name="name" required /></div>
+        <div class="field"><label>Type</label><select name="transaction_type"><option value="debit">debit</option><option value="credit">credit</option></select></div>
+        <div class="field"><label>ERPNext account</label><input name="erpnext_account" /></div>
+      </div>
+      <div class="field"><label>Keywords</label><textarea name="keywords" rows="2"></textarea></div>
+      <div class="field"><label>Learned tags</label><textarea name="tags" rows="2"></textarea></div>
+      <label class="check"><input type="checkbox" name="active" /> Active</label>
+      <button type="submit">Save</button>
+    </form>
+    <div class="card table-wrap"><table>
+      <thead><tr><th>Date</th><th>Description</th><th class="num">Amount</th><th>ERPNext</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, $$, amountCell, empty, esc, flash, onSubmit, page, param, syncBadge } from "/js/ui.js";
+    page();
+    const id = param("id");
+    const form = $("#edit");
+
+    async function load() {
+      const d = await api.categoryTransactions(id);
+      const c = d.category;
+      $("#title").textContent = c.name + (d.is_junk ? " (junk)" : "");
+      for (const k of ["name", "transaction_type", "erpnext_account", "keywords", "tags"]) form.elements[k].value = c[k] ?? "";
+      form.elements.active.checked = c.active;
+      $("#rows").innerHTML = d.transactions.map(t => `<tr><td>${t.date}</td><td>${esc(t.description)}</td>${amountCell(t)}<td>${syncBadge(t)}</td>
+        <td>${t.erpnext_synced ? "" : `<button class="secondary small unc" data-id="${t.id}">Remove</button>`}</td></tr>`).join("") || empty(5, "No transactions in this category.");
+      $$(".unc").forEach(b => b.addEventListener("click", async () => {
+        try { await api.uncategorize(b.dataset.id); load(); } catch (e) { flash(e.message, "err"); }
+      }));
+    }
+
+    onSubmit(form, async (d) => {
+      await api.updateCategory(id, { ...d, erpnext_account: d.erpnext_account.trim() || null, active: form.elements.active.checked });
+      flash("Saved.");
+      load();
+    });
+    load().catch(e => flash(e.message, "err"));
+  </script>
+</body>
+</html>

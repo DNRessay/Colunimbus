@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: L-Suite API (FastAPI on Lambda via Function URL) + async worker Lambda
+
+Parameters:
+  SecretKey:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+  DatabaseUrl:
+    Type: String
+    NoEcho: true
+    Description: mysql://user:pass@host:port/db or postgres://...
+  FrontendUrl:
+    Type: String
+    Default: https://lsuite-frontend.pages.dev
+  CorsAllowedOrigins:
+    Type: String
+    Default: ""
+    Description: Comma-separated. Empty = FrontendUrl only.
+  ApiUrl:
+    Type: String
+    Default: ""
+    Description: Public API base URL (only needed with a custom domain; Function URL is auto-detected).
+  GoogleClientId:
+    Type: String
+    Default: ""
+  GoogleClientSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+  GithubClientId:
+    Type: String
+    Default: ""
+  GithubClientSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+  FacebookAppId:
+    Type: String
+    Default: ""
+  FacebookAppSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+  GroqApiKeys:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Comma-separated Groq keys, rotated on rate limits.
+  GroqModel:
+    Type: String
+    Default: llama-3.3-70b-versatile
+  EmailHost:
+    Type: String
+    Default: ""
+  EmailPort:
+    Type: String
+    Default: "587"
+  EmailHostUser:
+    Type: String
+    Default: ""
+  EmailHostPassword:
+    Type: String
+    NoEcho: true
+    Default: ""
+  DefaultFromEmail:
+    Type: String
+    Default: "LSuite <noreply@example.com>"
+  NightlyCategorize:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+
+Conditions:
+  NightlyOn: !Equals [!Ref NightlyCategorize, "true"]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    CodeUri: .
+    MemorySize: 1024
+    Architectures: [x86_64]
+    Environment:
+      Variables:
+        SECRET_KEY: !Ref SecretKey
+        DATABASE_URL: !Ref DatabaseUrl
+        FRONTEND_URL: !Ref FrontendUrl
+        CORS_ALLOWED_ORIGINS: !Ref CorsAllowedOrigins
+        API_URL: !Ref ApiUrl
+        GOOGLE_CLIENT_ID: !Ref GoogleClientId
+        GOOGLE_CLIENT_SECRET: !Ref GoogleClientSecret
+        GITHUB_CLIENT_ID: !Ref GithubClientId
+        GITHUB_CLIENT_SECRET: !Ref GithubClientSecret
+        FACEBOOK_APP_ID: !Ref FacebookAppId
+        FACEBOOK_APP_SECRET: !Ref FacebookAppSecret
+        GROQ_API_KEYS: !Ref GroqApiKeys
+        GROQ_MODEL: !Ref GroqModel
+        EMAIL_HOST: !Ref EmailHost
+        EMAIL_PORT: !Ref EmailPort
+        EMAIL_HOST_USER: !Ref EmailHostUser
+        EMAIL_HOST_PASSWORD: !Ref EmailHostPassword
+        DEFAULT_FROM_EMAIL: !Ref DefaultFromEmail
+        UPLOADS_BUCKET: !Ref UploadsBucket
+
+Resources:
+  # PDF uploads are staged here for the worker; objects expire after a day.
+  UploadsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-uploads
+            Status: Enabled
+            ExpirationInDays: 1
+
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.worker.handler
+      Timeout: 900
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref UploadsBucket
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      Events:
+        NightlyCategorize:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 1 * * ? *) # 03:00 SAST
+            State: !If [NightlyOn, ENABLED, DISABLED]
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.main.handler
+      Timeout: 120
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          WORKER_FUNCTION_NAME: !Ref WorkerFunction
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref UploadsBucket
+        - LambdaInvokePolicy:
+            FunctionName: !Ref WorkerFunction
+
+  ApiFunctionUrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+Outputs:
+  ApiUrl:
+    Description: Put this in frontend/js/config.js as API_BASE
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  GmailRedirectUri:
+    Description: Add to Google Cloud Console as an authorized redirect URI
+    Value: !Sub "${ApiFunctionUrl.FunctionUrl}api/gmail/oauth/callback"
+  WorkerFunctionName:
+    Value: !Ref WorkerFunction
+  UploadsBucketName:
+    Value: !Ref UploadsBucket
