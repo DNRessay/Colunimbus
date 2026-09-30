@@ -11,8 +11,6 @@ Bookkeeping front-end for ERPNext, built for a group of South African companies.
 
 Product plan and roadmap: [docs/PLAN.md](docs/PLAN.md).
 
-It also includes **My investments**, a private per-user tracker (`backend/app/invest/`). It covers holdings and returns, a comparison with putting the same money into the Top 40, property ETFs or dollars, property equity and yield, and a JSE watchlist with nightly price alerts. Prices come from Yahoo's public chart feed (JSE quotes are converted from cents to rand); anything without a feed price can be priced by hand.
-
 ```
 backend/    FastAPI + SQLAlchemy on AWS Lambda (SAM template, eu-west-1)
 frontend/   Plain HTML/CSS/JS on Cloudflare Pages (no build step)

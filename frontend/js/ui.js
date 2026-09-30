@@ -6,7 +6,6 @@ export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 export const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const fmt = new Intl.NumberFormat("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-export const pct = (v, dp = 1) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(dp)}%`);
 export const money = (v) => (v === null || v === undefined || v === "" ? "" : `${Number(v) < 0 ? "-" : ""}R ${fmt.format(Math.abs(Number(v)))}`);
 export const day = (v) => (v ? String(v).slice(0, 10) : "");
 
@@ -84,7 +83,6 @@ const LINKS = [
   ["/erp-invoices.html", "Invoices", true],
   ["/accounts.html", "Bank accounts", true],
   ["/companies.html", "Companies", false],
-  ["/invest.html", "My investments", false],
   ["/settings.html", "Settings", false],
 ];
 
