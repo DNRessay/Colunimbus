@@ -8,6 +8,7 @@ from mangum import Mangum
 
 from .config import settings
 from .db import init_db
+from .invest.router import router as invest_router
 from .routers import auth, bridge, core, erp_invoices, erpnext, imports, reconciliation
 
 logging.getLogger().setLevel(logging.INFO)
@@ -15,7 +16,7 @@ logging.getLogger().setLevel(logging.INFO)
 if settings.auto_create_tables:
     init_db()
 
-app = FastAPI(title="Colunimbus API", redirect_slashes=False, docs_url="/docs" if settings.debug else None,
+app = FastAPI(title="C.T.H.A.I API", redirect_slashes=False, docs_url="/docs" if settings.debug else None,
               redoc_url=None)
 
 app.add_middleware(
@@ -56,13 +57,13 @@ async def unhandled(request: Request, exc: Exception):
 
 
 for r in (auth.router, auth.practice_router, auth.social_router, core.router, bridge.router, erpnext.router,
-          imports.router, imports.callback_router, reconciliation.router, erp_invoices.router):
+          imports.router, imports.callback_router, reconciliation.router, erp_invoices.router, invest_router):
     app.include_router(r)
 
 
 @app.get("/")
 def root():
-    return {"name": "Colunimbus API", "health": "/api/health"}
+    return {"name": "C.T.H.A.I API", "health": "/api/health"}
 
 
 # Lambda entrypoint: app.main.handler

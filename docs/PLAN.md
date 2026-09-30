@@ -1,4 +1,4 @@
-# Colunimbus — Product Plan
+# C.T.H.A.I — Product Plan
 
 Status: v2 (2026-09-30). Built by Vicinic (IT services & solutions).
 
@@ -82,7 +82,7 @@ This is built generically (an organisation has many companies), so Vicinic can s
 | 6 | **Job costing** for the building company: tag transactions to a project or job (ERPNext Project / Cost Center). | Carpentry and building work is quoted per job, so profit per job matters. |
 | 7 | WhatsApp statement upload (reuses the BHKA bot pattern). | Convenience. |
 
-## 5. Investing tracker (side module, after deploy)
+## 5. Investing tracker (built: "My investments")
 
 **For:** the accountant's personal EasyEquities investing. He likes property and some higher-risk shares. The portfolio started around R30k and is roughly 2–2.5× that now.
 
@@ -91,7 +91,7 @@ This is built generically (an organisation has many companies), so Vicinic can s
 - **Alerts:** price moves, dividend dates and results dates, by email or WhatsApp. Prices come from yfinance (`.JO` tickers).
 - **SA macro scorecard:** reuses the forex-news event-study and scoring loop. It makes calls on SARB rate decisions, SA CPI and USD/ZAR, then scores them after the event, so the hit rate is honest.
 
-It lives in `backend/app/invest/` behind a flag and shares the login. It stays a personal tracker, not advice to others.
+It lives in `backend/app/invest/`, shares the login, and each user's data is private. Done: holdings, returns, the benchmark comparison, property, the watchlist and alerts. Still to do: an EasyEquities-specific import (needs a sample export) and the SA macro scorecard. It stays a personal tracker, not advice to others.
 
 **Reused from forex-news:**
 - `analysis/event_study.py`
@@ -111,4 +111,4 @@ It lives in `backend/app/invest/` behind a flag and shares the login. It stays a
 6. Investing: can he export his EasyEquities transaction history?
 
 **For Vicinic:**
-7. Branding: is it "Colunimbus" or a Vicinic product name?
+7. ~~Branding~~: the product is called **C.T.H.A.I**.

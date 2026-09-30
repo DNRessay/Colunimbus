@@ -6,6 +6,7 @@ export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 export const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const fmt = new Intl.NumberFormat("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const pct = (v, dp = 1) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(dp)}%`);
 export const money = (v) => (v === null || v === undefined || v === "" ? "" : `${Number(v) < 0 ? "-" : ""}R ${fmt.format(Math.abs(Number(v)))}`);
 export const day = (v) => (v ? String(v).slice(0, 10) : "");
 
@@ -83,6 +84,7 @@ const LINKS = [
   ["/erp-invoices.html", "Invoices", true],
   ["/accounts.html", "Bank accounts", true],
   ["/companies.html", "Companies", false],
+  ["/invest.html", "My investments", false],
   ["/settings.html", "Settings", false],
 ];
 
@@ -105,7 +107,7 @@ export async function page({ needsCompany = true } = {}) {
   if (nav) {
     const here = location.pathname;
     nav.innerHTML = `
-      <a class="brand" href="/dashboard.html">Colunimbus</a>
+      <a class="brand" href="/dashboard.html">C.T.H.A.I</a>
       ${active.length ? `<select id="company" aria-label="Company">${active.map(c =>
         `<option value="${c.id}" ${String(c.id) === company.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>` : ""}
       <button class="menu secondary" aria-label="Menu">☰</button>

@@ -134,7 +134,7 @@ def password_reset(body: ResetRequestIn, db: Session = Depends(get_db)):
     for user in db.scalars(select(User).where(func.lower(User.email) == email, User.is_active.is_(True))):
         token = make_token("reset", user.id, timedelta(hours=24), pwh=password_fingerprint(user.password))
         link = f"{settings.frontend_url}/reset-password.html?token={token}"
-        send_mail(user.email, "Colunimbus — Password Reset", (
+        send_mail(user.email, "C.T.H.A.I — Password Reset", (
             f"Hi {user.first_name or user.username},\n\nYou requested a password reset.\n\n"
             f"Set a new password here:\n{link}\n\nThis link expires in 24 hours. "
             "If you didn't request this, ignore this email.\n"
