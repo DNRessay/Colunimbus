@@ -4,7 +4,7 @@ version = 0.1
 use_container = true
 
 [default.deploy.parameters]
-stack_name = "lsuite-api"
+stack_name = "colunimbus-api"
 region = "eu-west-1"
 resolve_s3 = true
 capabilities = "CAPABILITY_IAM"
