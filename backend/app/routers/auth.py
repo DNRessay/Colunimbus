@@ -10,59 +10,55 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..deps import current_user, get_db, get_owned
-from ..models import SocialLink, User, UserProfile, utcnow
+from ..deps import current_user, get_db, owner
+from ..models import Practice, User, utcnow
 from ..schemas import (
-    ChangePasswordIn, LoginIn, ProfileIn, ProfileOut, RefreshIn, RegisterIn, ResetConfirmIn,
-    ResetRequestIn, SocialLinkIn, SocialLinkOut, UserOut,
+    ChangePasswordIn, LoginIn, MeIn, MemberIn, PracticeIn, PracticeOut, RefreshIn, RegisterIn, ResetConfirmIn,
+    ResetRequestIn, UserOut,
 )
 from ..security import (
-    hash_password, make_token, password_fingerprint, password_problems, read_token, token_pair,
-    verify_password,
+    hash_password, make_token, password_fingerprint, password_problems, read_token, token_pair, verify_password,
 )
+from ..services.categorize import seed_categories
 from ..services.mailer import send_mail
 
-router = APIRouter(prefix="/api/authusers", tags=["auth"])
-token_router = APIRouter(prefix="/api", tags=["auth"])
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+practice_router = APIRouter(prefix="/api/practice", tags=["practice"])
 social_router = APIRouter(prefix="/auth/social", tags=["auth"])
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-def get_profile(db: Session, user: User) -> UserProfile:
-    profile = db.scalar(select(UserProfile).where(UserProfile.user_id == user.id))
-    if not profile:
-        profile = UserProfile(user_id=user.id)
-        db.add(profile)
-        db.commit()
-    return profile
 
 
 def auth_response(user):
     return {"user": UserOut.model_validate(user).model_dump(), **token_pair(user.id)}
 
 
-@router.post("/register", status_code=201)
-def register(body: RegisterIn, db: Session = Depends(get_db)):
-    email = body.email.strip().lower()
+def validate_new_user(db: Session, email: str, username: str, password: str):
     errors = {}
     if not EMAIL_RE.match(email):
         errors["email"] = ["Enter a valid email address."]
     elif db.scalar(select(User.id).where(func.lower(User.email) == email)):
         errors["email"] = ["An account with this email already exists."]
-    if db.scalar(select(User.id).where(func.lower(User.username) == body.username.lower())):
+    if db.scalar(select(User.id).where(func.lower(User.username) == username.lower())):
         errors["username"] = ["That username is already taken."]
-    if problems := password_problems(body.password, body.username, email):
+    if problems := password_problems(password, username, email):
         errors["password"] = problems
     if errors:
         raise HTTPException(400, errors)
 
-    user = User(username=body.username, email=email, first_name=body.first_name, last_name=body.last_name,
-                password=hash_password(body.password))
-    db.add(user)
+
+@router.post("/register", status_code=201)
+def register(body: RegisterIn, db: Session = Depends(get_db)):
+    """Creates a new organisation with this user as its owner."""
+    email = body.email.strip().lower()
+    validate_new_user(db, email, body.username, body.password)
+    practice = Practice(name=body.practice_name.strip() or f"{body.first_name} {body.last_name}".strip())
+    db.add(practice)
     db.flush()
-    profile_data = body.model_dump(include=set(ProfileIn.model_fields), exclude_none=True)
-    db.add(UserProfile(user_id=user.id, **profile_data))
+    seed_categories(db, practice.id)
+    user = User(practice_id=practice.id, role="owner", username=body.username, email=email,
+                first_name=body.first_name, last_name=body.last_name, password=hash_password(body.password))
+    db.add(user)
     db.commit()
     return auth_response(user)
 
@@ -70,8 +66,8 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
 @router.post("/login")
 def login(body: LoginIn, db: Session = Depends(get_db)):
     ident = body.username.strip()
-    col = func.lower(User.email) if "@" in ident else User.username
-    user = db.scalar(select(User).where(col == (ident.lower() if "@" in ident else ident)))
+    cond = func.lower(User.email) == ident.lower() if "@" in ident else User.username == ident
+    user = db.scalar(select(User).where(cond))
     if not user or not user.is_active or not verify_password(body.password, user.password):
         raise HTTPException(401, "Invalid username or password.")
     user.last_login = utcnow()
@@ -81,8 +77,19 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
 
 @router.post("/logout")
 def logout(user: User = Depends(current_user)):
-    # Stateless JWTs: the client discards its tokens.
     return {"message": "Logged out."}
+
+
+@router.post("/token/refresh")
+def refresh_token(body: RefreshIn, db: Session = Depends(get_db)):
+    try:
+        payload = read_token(body.refresh, "refresh")
+    except jwt.PyJWTError:
+        raise HTTPException(401, "Token is invalid or expired.")
+    user = db.get(User, int(payload["sub"]))
+    if not user or not user.is_active:
+        raise HTTPException(401, "User not found or inactive.")
+    return {"access": token_pair(user.id)["access"]}
 
 
 @router.get("/me", response_model=UserOut)
@@ -90,18 +97,19 @@ def me(user: User = Depends(current_user)):
     return user
 
 
-@router.get("/profile", response_model=ProfileOut)
-def read_profile(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return get_profile(db, user)
-
-
-@router.patch("/profile", response_model=ProfileOut)
-def update_profile(body: ProfileIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    profile = get_profile(db, user)
-    for k, v in body.model_dump(exclude_unset=True).items():
-        setattr(profile, k, v if v is not None or k == "date_of_birth" else "")
+@router.patch("/me", response_model=UserOut)
+def update_me(body: MeIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    data = body.model_dump(exclude_none=True)
+    if "email" in data:
+        data["email"] = data["email"].strip().lower()
+        if not EMAIL_RE.match(data["email"]):
+            raise HTTPException(400, {"email": ["Enter a valid email address."]})
+        if db.scalar(select(User.id).where(func.lower(User.email) == data["email"], User.id != user.id)):
+            raise HTTPException(400, {"email": ["An account with this email already exists."]})
+    for k, v in data.items():
+        setattr(user, k, v)
     db.commit()
-    return profile
+    return user
 
 
 @router.post("/change-password")
@@ -126,12 +134,11 @@ def password_reset(body: ResetRequestIn, db: Session = Depends(get_db)):
     for user in db.scalars(select(User).where(func.lower(User.email) == email, User.is_active.is_(True))):
         token = make_token("reset", user.id, timedelta(hours=24), pwh=password_fingerprint(user.password))
         link = f"{settings.frontend_url}/reset-password.html?token={token}"
-        send_mail(user.email, "LSuite — Password Reset", (
-            f"Hi {user.username},\n\nYou requested a password reset for your LSuite account.\n\n"
+        send_mail(user.email, "Colunimbus — Password Reset", (
+            f"Hi {user.first_name or user.username},\n\nYou requested a password reset.\n\n"
             f"Set a new password here:\n{link}\n\nThis link expires in 24 hours. "
-            "If you didn't request this, ignore this email.\n\n— LSuite\n"
+            "If you didn't request this, ignore this email.\n"
         ))
-    # Same answer either way so account existence doesn't leak.
     return {"message": "If that email exists, a reset link has been sent."}
 
 
@@ -151,74 +158,55 @@ def password_reset_confirm(body: ResetConfirmIn, db: Session = Depends(get_db)):
     return {"message": "Password has been reset."}
 
 
-@router.get("/links", response_model=list[SocialLinkOut])
-def list_links(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return db.scalars(select(SocialLink).where(SocialLink.user_id == user.id).order_by(SocialLink.platform)).all()
+# ── Organisation + team ─────────────────────────────────────────────────────
+
+@practice_router.get("", response_model=PracticeOut)
+def get_practice(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return db.get(Practice, user.practice_id)
 
 
-@router.post("/links", response_model=SocialLinkOut, status_code=201)
-def add_link(body: SocialLinkIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    link = SocialLink(user_id=user.id, platform=body.platform, url=body.url)
-    db.add(link)
+@practice_router.patch("", response_model=PracticeOut)
+def update_practice(body: PracticeIn, user: User = Depends(owner), db: Session = Depends(get_db)):
+    practice = db.get(Practice, user.practice_id)
+    practice.name = body.name.strip()
     db.commit()
-    return link
+    return practice
 
 
-@router.get("/links/{link_id}", response_model=SocialLinkOut)
-def get_link(link_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return get_owned(db, SocialLink, link_id, user)
+@practice_router.get("/users", response_model=list[UserOut])
+def team(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return db.scalars(select(User).where(User.practice_id == user.practice_id, User.is_active.is_(True))
+                      .order_by(User.first_name)).all()
 
 
-@router.patch("/links/{link_id}", response_model=SocialLinkOut)
-def update_link(link_id: int, body: SocialLinkIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    link = get_owned(db, SocialLink, link_id, user)
-    link.platform, link.url = body.platform, body.url
+@practice_router.post("/users", response_model=UserOut, status_code=201)
+def add_member(body: MemberIn, user: User = Depends(owner), db: Session = Depends(get_db)):
+    email = body.email.strip().lower()
+    validate_new_user(db, email, body.username, body.password)
+    member = User(practice_id=user.practice_id, role="owner" if body.role == "owner" else "bookkeeper",
+                  username=body.username, email=email, first_name=body.first_name, last_name=body.last_name,
+                  password=hash_password(body.password))
+    db.add(member)
     db.commit()
-    return link
+    return member
 
 
-@router.delete("/links/{link_id}", status_code=204)
-def delete_link(link_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    db.delete(get_owned(db, SocialLink, link_id, user))
+@practice_router.delete("/users/{user_id}", status_code=204)
+def remove_member(user_id: int, user: User = Depends(owner), db: Session = Depends(get_db)):
+    member = db.get(User, user_id)
+    if not member or member.practice_id != user.practice_id:
+        raise HTTPException(404, "Not found.")
+    if member.id == user.id:
+        raise HTTPException(400, "You can't remove yourself.")
+    member.is_active = False
     db.commit()
 
 
-@token_router.post("/token/refresh")
-def refresh_token(body: RefreshIn, db: Session = Depends(get_db)):
-    try:
-        payload = read_token(body.refresh, "refresh")
-    except jwt.PyJWTError:
-        raise HTTPException(401, "Token is invalid or expired.")
-    user = db.get(User, int(payload["sub"]))
-    if not user or not user.is_active:
-        raise HTTPException(401, "User not found or inactive.")
-    return {"access": token_pair(user.id)["access"]}
+# ── Google sign-in (existing accounts only) ─────────────────────────────────
+# Top-level redirect to Google, back to this API, then on to the frontend with JWTs in the fragment.
 
-
-# ── Social login (Google / GitHub / Facebook) ───────────────────────────────
-# Browser does a top-level redirect to the provider, comes back to this API,
-# and gets sent on to the frontend with JWTs in the URL fragment.
-
-PROVIDERS = {
-    "google": {
-        "authorize": "https://accounts.google.com/o/oauth2/v2/auth",
-        "token": "https://oauth2.googleapis.com/token",
-        "scope": "openid email profile",
-        "creds": lambda: (settings.google_client_id, settings.google_client_secret),
-    },
-    "github": {
-        "authorize": "https://github.com/login/oauth/authorize",
-        "token": "https://github.com/login/oauth/access_token",
-        "scope": "read:user user:email",
-        "creds": lambda: (settings.github_client_id, settings.github_client_secret),
-    },
-    "facebook": {
-        "authorize": "https://www.facebook.com/v19.0/dialog/oauth",
-        "token": "https://graph.facebook.com/v19.0/oauth/access_token",
-        "scope": "email,public_profile",
-        "creds": lambda: (settings.facebook_app_id, settings.facebook_app_secret),
-    },
-}
+GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
 
 
 def _api_base(request: Request):
@@ -228,110 +216,53 @@ def _api_base(request: Request):
     return base
 
 
-def _provider(name):
-    p = PROVIDERS.get(name)
-    if not p or not p["creds"]()[0]:
-        raise HTTPException(404, f"Social login provider '{name}' is not configured.")
-    return p
-
-
 def _fail(reason):
     return RedirectResponse(f"{settings.frontend_url}/login.html?error={reason}", status_code=302)
 
 
-@social_router.get("/{provider}/login")
-def social_login(provider: str, request: Request):
-    p = _provider(provider)
-    client_id, _ = p["creds"]()
-    state = make_token("social", provider, timedelta(minutes=10))
+@social_router.get("/providers")
+def providers():
+    return {"providers": ["google"] if settings.google_client_id else []}
+
+
+@social_router.get("/google/login")
+def google_login(request: Request):
+    if not settings.google_client_id:
+        raise HTTPException(404, "Google sign-in is not configured.")
     params = {
-        "client_id": client_id,
-        "redirect_uri": f"{_api_base(request)}/auth/social/{provider}/callback",
+        "client_id": settings.google_client_id,
+        "redirect_uri": f"{_api_base(request)}/auth/social/google/callback",
         "response_type": "code",
-        "scope": p["scope"],
-        "state": state,
+        "scope": "openid email profile",
+        "state": make_token("social", "google", timedelta(minutes=10)),
     }
-    return RedirectResponse(f"{p['authorize']}?{urlencode(params)}", status_code=302)
+    return RedirectResponse(f"{GOOGLE_AUTH}?{urlencode(params)}", status_code=302)
 
 
-def _fetch_identity(provider, access_token):
-    h = {"Authorization": f"Bearer {access_token}"}
-    if provider == "google":
-        d = requests.get("https://openidconnect.googleapis.com/v1/userinfo", headers=h, timeout=15).json()
-        return {"email": d.get("email"), "first_name": d.get("given_name", ""), "last_name": d.get("family_name", ""),
-                "username": (d.get("email") or "").split("@")[0]}
-    if provider == "github":
-        d = requests.get("https://api.github.com/user", headers=h, timeout=15).json()
-        email = d.get("email")
-        if not email:
-            emails = requests.get("https://api.github.com/user/emails", headers=h, timeout=15).json()
-            email = next((e["email"] for e in emails if e.get("primary") and e.get("verified")), None)
-        first, _, last = (d.get("name") or "").partition(" ")
-        return {"email": email, "first_name": first, "last_name": last, "username": d.get("login", ""),
-                "github_url": d.get("html_url", ""), "portfolio_url": d.get("blog", "")}
-    d = requests.get("https://graph.facebook.com/me", params={"fields": "id,email,first_name,last_name",
-                     "access_token": access_token}, timeout=15).json()
-    return {"email": d.get("email"), "first_name": d.get("first_name", ""), "last_name": d.get("last_name", ""),
-            "username": f"fb{d.get('id', '')}"}
-
-
-def _unique_username(db, base):
-    base = re.sub(r"[^\w.@+-]", "", base or "user")[:140] or "user"
-    name, n = base, 1
-    while db.scalar(select(User.id).where(User.username == name)):
-        n += 1
-        name = f"{base}{n}"
-    return name
-
-
-@social_router.get("/{provider}/callback")
-def social_callback(provider: str, request: Request, code: str = "", state: str = "", db: Session = Depends(get_db)):
-    p = _provider(provider)
+@social_router.get("/google/callback")
+def google_callback(request: Request, code: str = "", state: str = "", db: Session = Depends(get_db)):
     try:
-        if read_token(state, "social")["sub"] != provider:
-            return _fail("invalid_state")
+        read_token(state, "social")
     except jwt.PyJWTError:
         return _fail("invalid_state")
     if not code:
         return _fail("oauth_failed")
-
-    client_id, secret = p["creds"]()
-    r = requests.post(p["token"], data={
-        "client_id": client_id, "client_secret": secret, "code": code, "grant_type": "authorization_code",
-        "redirect_uri": f"{_api_base(request)}/auth/social/{provider}/callback",
-    }, headers={"Accept": "application/json"}, timeout=20)
+    r = requests.post(GOOGLE_TOKEN, data={
+        "client_id": settings.google_client_id, "client_secret": settings.google_client_secret, "code": code,
+        "grant_type": "authorization_code", "redirect_uri": f"{_api_base(request)}/auth/social/google/callback",
+    }, timeout=20)
     access = r.json().get("access_token") if r.ok else None
     if not access:
         return _fail("oauth_failed")
-
-    ident = _fetch_identity(provider, access)
-    email = (ident.get("email") or "").lower()
-    if not email:
-        return _fail("no_email")
-
-    user = db.scalar(select(User).where(func.lower(User.email) == email))
-    if not user:
-        user = User(username=_unique_username(db, ident["username"]), email=email,
-                    first_name=ident["first_name"][:150], last_name=ident["last_name"][:150], password="!")
-        db.add(user)
-        db.flush()
-    if not user.is_active:
-        return _fail("inactive")
-    profile = get_profile(db, user)
-    if ident.get("github_url") and not profile.github_url:
-        profile.github_url = ident["github_url"][:200]
-    if ident.get("portfolio_url") and not profile.portfolio_url:
-        profile.portfolio_url = ident["portfolio_url"][:200]
+    info = requests.get("https://openidconnect.googleapis.com/v1/userinfo",
+                        headers={"Authorization": f"Bearer {access}"}, timeout=15).json()
+    email = (info.get("email") or "").lower()
+    user = db.scalar(select(User).where(func.lower(User.email) == email)) if email else None
+    # Team members are added by the owner; Google sign-in never creates accounts.
+    if not user or not user.is_active:
+        return _fail("no_account")
     user.last_login = utcnow()
     db.commit()
-
     tokens = token_pair(user.id)
-    page = "/dashboard.html" if profile.occupation and profile.city else "/complete-profile.html"
-    return RedirectResponse(
-        f"{settings.frontend_url}{page}#access={tokens['access']}&refresh={tokens['refresh']}", status_code=302
-    )
-
-
-@social_router.get("/providers")
-def social_providers():
-    return {"providers": [name for name, p in PROVIDERS.items() if p["creds"]()[0]]}
+    return RedirectResponse(f"{settings.frontend_url}/dashboard.html#access={tokens['access']}&refresh={tokens['refresh']}",
+                            status_code=302)

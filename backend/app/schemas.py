@@ -1,16 +1,16 @@
 import datetime as dt
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Out(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ── Auth ────────────────────────────────────────────────────────────────────
+# ── Auth / practice ─────────────────────────────────────────────────────────
 
 class UserOut(Out):
     id: int
@@ -18,55 +18,32 @@ class UserOut(Out):
     email: str
     first_name: str
     last_name: str
+    role: str
+    practice_id: int
 
 
-PROFILE_FIELDS = [
-    "phone", "date_of_birth", "id_number", "city", "province", "country", "occupation",
-    "years_experience", "industry", "linkedin_url", "github_url", "portfolio_url",
-]
-
-
-class ProfileIn(BaseModel):
-    phone: Optional[str] = None
-    date_of_birth: Optional[date] = None
-    id_number: Optional[str] = None
-    city: Optional[str] = None
-    province: Optional[str] = None
-    country: Optional[str] = None
-    occupation: Optional[str] = None
-    years_experience: Optional[str] = None
-    industry: Optional[str] = None
-    linkedin_url: Optional[str] = None
-    github_url: Optional[str] = None
-    portfolio_url: Optional[str] = None
-
-    @field_validator("date_of_birth", mode="before")
-    @classmethod
-    def blank_date(cls, v):
-        return v or None
-
-
-class ProfileOut(Out):
-    phone: str
-    date_of_birth: Optional[date]
-    id_number: str
-    city: str
-    province: str
-    country: str
-    occupation: str
-    years_experience: str
-    industry: str
-    linkedin_url: str
-    github_url: str
-    portfolio_url: str
-
-
-class RegisterIn(ProfileIn):
+class RegisterIn(BaseModel):
+    practice_name: str = ""
     first_name: str = Field(min_length=1)
     last_name: str = Field(min_length=1)
     email: str
     username: str = Field(min_length=1, max_length=150)
     password: str
+
+
+class MemberIn(BaseModel):
+    first_name: str = Field(min_length=1)
+    last_name: str = ""
+    email: str
+    username: str = Field(min_length=1, max_length=150)
+    password: str
+    role: str = "bookkeeper"
+
+
+class MeIn(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
 
 
 class LoginIn(BaseModel):
@@ -93,25 +70,49 @@ class ResetConfirmIn(BaseModel):
     new_password: str
 
 
-class SocialLinkIn(BaseModel):
-    platform: str = Field(min_length=1, max_length=80)
-    url: str = Field(min_length=1, max_length=500)
-
-    @field_validator("url")
-    @classmethod
-    def add_scheme(cls, v):
-        v = v.strip()
-        return v if v.startswith(("http://", "https://")) else "https://" + v
-
-
-class SocialLinkOut(Out):
+class PracticeOut(Out):
     id: int
-    platform: str
-    url: str
-    icon: str = Field(validation_alias="display_icon")
+    name: str
+    created_at: datetime
 
 
-# ── Core resources ──────────────────────────────────────────────────────────
+class PracticeIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+# ── Clients ─────────────────────────────────────────────────────────────────
+
+class ClientIn(BaseModel):
+    name: Optional[str] = None
+    registration_number: Optional[str] = None
+    vat_number: Optional[str] = None
+    vat_registered: Optional[bool] = None
+    year_end_month: Optional[int] = Field(None, ge=1, le=12)
+    contact_email: Optional[str] = None
+    notes: Optional[str] = None
+    erpnext_company: Optional[str] = None
+    erpnext_bank_account: Optional[str] = None
+    erpnext_cost_center: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class ClientOut(Out):
+    id: int
+    name: str
+    registration_number: str
+    vat_number: str
+    vat_registered: bool
+    year_end_month: int
+    contact_email: str
+    notes: str
+    erpnext_company: str
+    erpnext_bank_account: str
+    erpnext_cost_center: str
+    is_active: bool
+    created_at: datetime
+
+
+# ── Bank data ───────────────────────────────────────────────────────────────
 
 class BankAccountIn(BaseModel):
     account_name: Optional[str] = None
@@ -119,7 +120,6 @@ class BankAccountIn(BaseModel):
     bank_name: Optional[str] = None
     account_type: Optional[str] = None
     currency: Optional[str] = None
-    balance: Optional[Decimal] = None
     erpnext_account: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -131,166 +131,94 @@ class BankAccountOut(Out):
     bank_name: str
     account_type: str
     currency: str
-    balance: Decimal
     erpnext_account: str
     is_active: bool
     created_at: datetime
-    updated_at: datetime
 
 
 class CategoryIn(BaseModel):
     name: Optional[str] = None
-    erpnext_account: Optional[str] = None
     transaction_type: Optional[str] = None
     keywords: Optional[str] = None
     tags: Optional[str] = None
     active: Optional[bool] = None
     color: Optional[int] = None
+    erpnext_account: Optional[str] = None  # saved for the selected client
 
 
 class CategoryOut(Out):
     id: int
     name: str
-    erpnext_account: Optional[str]
     transaction_type: str
     keywords: str
     tags: str
     active: bool
     color: Optional[int]
+    erpnext_account: str = ""  # for the selected client, filled in by the router
     created_at: datetime
+
+
+class StatementIn(BaseModel):
+    client_id: Optional[int] = None
+    bank_account_id: Optional[int] = None
 
 
 class StatementOut(Out):
     id: int
+    client_id: Optional[int]
+    bank_account_id: Optional[int]
+    source: str
     gmail_id: str
     subject: str
     sender: str
     received_date: Optional[datetime]
-    statement_date: Optional[date]
     bank_name: str
-    account_number: str
-    has_pdf: bool
+    has_attachment: bool
     state: str
-    is_processed: bool
     processed_date: Optional[datetime]
     transaction_count: int
     error_message: str
     created_at: datetime
 
 
-class InvoiceItemIn(BaseModel):
-    item_code: str = ""
-    description: str
-    quantity: Decimal = Decimal("1")
-    unit_price: Decimal
-    notes: str = ""
-
-
-class InvoiceItemOut(Out):
-    id: int
-    item_code: str
-    description: str
-    quantity: Decimal
-    unit_price: Decimal
-    total: Decimal
-    notes: str
-
-
-class InvoiceIn(BaseModel):
-    invoice_number: Optional[str] = None
-    invoice_date: Optional[date] = None
-    due_date: Optional[date] = None
-    customer_name: Optional[str] = None
-    customer_email: Optional[str] = None
-    customer_address: Optional[str] = None
-    tax_rate: Optional[Decimal] = None
-    discount_amount: Optional[Decimal] = None
-    paid_amount: Optional[Decimal] = None
-    currency: Optional[str] = None
-    status: Optional[str] = None
-    notes: Optional[str] = None
-    terms: Optional[str] = None
-    items: Optional[list[InvoiceItemIn]] = None
-
-    @field_validator("due_date", mode="before")
-    @classmethod
-    def blank_date(cls, v):
-        return v or None
-
-
-class InvoiceOut(Out):
-    id: int
-    invoice_number: str
-    invoice_date: date
-    due_date: Optional[date]
-    customer_name: str
-    customer_email: str
-    customer_address: str
-    subtotal: Decimal
-    tax_amount: Decimal
-    tax_rate: Decimal
-    discount_amount: Decimal
-    total_amount: Decimal
-    paid_amount: Decimal
-    outstanding_amount: Decimal
-    currency: str
-    status: str
-    erpnext_id: str
-    erpnext_synced: bool
-    notes: str
-    terms: str
-    is_paid: bool
-    is_overdue: bool
-    items: list[InvoiceItemOut]
-    created_at: datetime
-    updated_at: datetime
-
-
 class TransactionIn(BaseModel):
     bank_account: Optional[int] = None
     date: Optional[dt.date] = None
     transaction_type: Optional[str] = None
-    amount: Optional[Decimal] = None
-    fee: Optional[Decimal] = None
     posting_date: Optional[dt.date] = None
     description: Optional[str] = None
     reference_number: Optional[str] = None
     deposit: Optional[Decimal] = None
     withdrawal: Optional[Decimal] = None
     balance: Optional[Decimal] = None
-    currency: Optional[str] = None
     category: Optional[int] = None
-    tags: Optional[str] = None
     notes: Optional[str] = None
-    recon_status: Optional[str] = None
 
 
 class TransactionOut(Out):
     id: int
     bank_account: Optional[int] = Field(validation_alias="bank_account_id")
-    date: date
+    statement: Optional[int] = Field(validation_alias="statement_id")
+    date: dt.date
+    posting_date: Optional[dt.date]
     transaction_type: str
-    amount: Optional[Decimal]
-    fee: Optional[Decimal]
-    posting_date: Optional[date]
     description: str
     reference_number: str
+    amount: Optional[Decimal]
     deposit: Optional[Decimal]
     withdrawal: Optional[Decimal]
+    fee: Optional[Decimal]
     balance: Optional[Decimal]
     currency: str
-    unallocated_amount: Optional[Decimal]
     category: Optional[int] = Field(validation_alias="category_id")
     category_name: Optional[str]
     tags: str
     notes: str
     recon_status: str
-    erpnext_id: str
     erpnext_synced: bool
     erpnext_journal_entry: str
     erpnext_error: str
     created_at: datetime
-    updated_at: datetime
 
 
 class ERPNextConfigIn(BaseModel):
@@ -298,9 +226,6 @@ class ERPNextConfigIn(BaseModel):
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     api_secret: Optional[str] = None
-    default_company: Optional[str] = None
-    bank_account: Optional[str] = None
-    default_cost_center: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -309,18 +234,13 @@ class ERPNextConfigOut(Out):
     id: int
     name: str
     base_url: str
-    default_company: str
-    bank_account: str
-    default_cost_center: str
     is_active: bool
     last_sync: Optional[datetime]
     created_at: datetime
-    updated_at: datetime
 
 
 class SyncLogOut(Out):
     id: int
-    config: int = Field(validation_alias="config_id")
     record_type: str
     record_id: int
     erpnext_doctype: str
@@ -342,9 +262,8 @@ class PDFJobOut(Out):
     transactions_saved: int
     transactions_skipped: int
     error_message: str
-    statement: Optional[int] = Field(validation_alias="statement_id")
+    statement_id: Optional[int]
     created_at: datetime
-    updated_at: datetime
 
 
 class JobOut(Out):
@@ -370,10 +289,10 @@ class ERPInvoiceOut(Out):
     currency: str
     grand_total: Decimal
     outstanding_amount: Decimal
-    posting_date: date
-    due_date: Optional[date]
+    posting_date: dt.date
+    due_date: Optional[dt.date]
     bill_no: str
-    bill_date: Optional[date]
+    bill_date: Optional[dt.date]
     fetched_at: datetime
     is_paid: bool
     is_overdue: bool
@@ -383,19 +302,11 @@ class ERPInvoiceOut(Out):
 class JournalEntryOut(Out):
     id: int
     je_name: str
-    posting_date: date
+    posting_date: dt.date
     amount: Decimal
     account: str
     reference_number: str
     remark: str
-    fetched_at: datetime
-
-
-class MatchIn(BaseModel):
-    transaction: int
-    journal_entry: Optional[int] = None
-    status: str = "manual"
-    flag_reason: str = ""
 
 
 class MatchOut(Out):
@@ -406,11 +317,6 @@ class MatchOut(Out):
     flag_reason: str
     matched_at: datetime
     matched_by: str
-
-
-class PeriodIn(BaseModel):
-    year: int = Field(ge=2000, le=2100)
-    month: int = Field(ge=1, le=12)
 
 
 class PeriodOut(Out):

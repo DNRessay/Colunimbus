@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Import — L-Suite</title>
+  <title>Import — Colunimbus</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
@@ -11,24 +11,16 @@
   <nav id="nav"></nav>
   <main>
     <h1>Import statements</h1>
+    <p class="muted">Uploads go into <strong id="company-name"></strong>. Switch company in the top bar.</p>
     <div id="msg"></div>
-
-    <div class="card">
-      <h3>Gmail</h3>
-      <p id="status" class="muted">Checking…</p>
-      <div class="row">
-        <button id="btn-connect" hidden>Connect Gmail</button>
-        <button id="btn-import" hidden>Import statements from Gmail</button>
-        <button id="btn-disconnect" class="danger" hidden>Disconnect</button>
-      </div>
-    </div>
 
     <div class="card">
       <h3>Upload PDF statement(s)</h3>
       <form id="pdf-form">
         <div class="fields">
-          <div class="field"><label>Bank</label>
-            <select name="bank_name"><option value="capitec">Capitec</option><option value="tymebank">TymeBank</option><option value="gotyme">GoTyme</option><option value="other">Other</option></select>
+          <div class="field"><label>Bank account</label><select name="bank_account_id" class="ba"></select></div>
+          <div class="field"><label>Bank format</label>
+            <select name="bank_name"><option value="capitec">Capitec</option><option value="tymebank">TymeBank</option><option value="gotyme">GoTyme</option><option value="other">Other (best effort)</option></select>
           </div>
           <div class="field"><label>PDF password (if any)</label><input name="pdf_password" type="password" autocomplete="off" /></div>
         </div>
@@ -39,46 +31,58 @@
     </div>
 
     <div class="card">
-      <h3>Upload CSV</h3>
+      <h3>Upload CSV statement(s)</h3>
       <form id="csv-form">
-        <div class="field"><input type="file" name="csv_file" accept=".csv" required /></div>
-        <label class="check"><input type="checkbox" name="create_statement" checked /> Record as a statement</label>
-        <button type="submit">Upload CSV</button>
+        <div class="fields"><div class="field"><label>Bank account</label><select name="bank_account_id" class="ba"></select></div></div>
+        <div class="field"><input type="file" name="csv_files" accept=".csv" multiple required /></div>
+        <button type="submit">Upload CSV(s)</button>
       </form>
       <p><a href="#" id="template">Download CSV template</a></p>
     </div>
 
     <div class="card">
-      <h3>Bulk CSV import</h3>
-      <form id="bulk-form">
-        <div class="field"><input type="file" name="csv_files" accept=".csv" multiple required /></div>
-        <button type="submit">Import all</button>
-      </form>
+      <h3>Gmail</h3>
+      <p class="muted">Pulls bank statement emails from your mailbox into the <a href="/statements.html">Statements</a> inbox. Emails that mention a known account number are assigned to the right company automatically.</p>
+      <p id="status" class="muted">Checking…</p>
+      <div class="row">
+        <button id="btn-connect" hidden>Connect Gmail</button>
+        <button id="btn-fetch" hidden>Fetch statement emails</button>
+        <button id="btn-disconnect" class="danger" hidden>Disconnect</button>
+      </div>
     </div>
 
-    <h2>Recent PDF jobs</h2>
+    <h2>Recent PDF uploads</h2>
     <div class="card table-wrap"><table>
-      <thead><tr><th>Files</th><th>Bank</th><th>Status</th><th class="num">Found</th><th class="num">Saved</th><th class="num">Skipped</th></tr></thead>
+      <thead><tr><th>Files</th><th>Bank</th><th>Status</th><th class="num">Found</th><th class="num">Saved</th><th class="num">Duplicates</th></tr></thead>
       <tbody id="jobs"></tbody>
     </table></div>
   </main>
   <script type="module">
     import { api } from "/js/api.js";
-    import { $, action, badge, download, empty, esc, flash, onSubmit, page, param, poll } from "/js/ui.js";
-    page();
+    import { $, $$, action, badge, download, empty, esc, flash, onSubmit, page, param, poll } from "/js/ui.js";
+    const { current } = await page();
+    $("#company-name").textContent = current.name;
 
     const oauthErrors = { oauth_failed: "Google sign-in was cancelled.", invalid_state: "Link expired — try connecting again.", token_exchange: "Google rejected the token exchange." };
     if (param("error")) flash(oauthErrors[param("error")] || "Gmail connection failed.", "err");
     if (param("connected")) flash("Gmail connected.");
+
+    const accounts = await api.accounts();
+    $$(".ba").forEach(s => s.innerHTML = `<option value="">— not specified —</option>` +
+      accounts.map(a => `<option value="${a.id}">${esc(a.account_name)} (${esc(a.bank_name)})</option>`).join(""));
+    if (!accounts.length) flash("Tip: add this company's bank accounts on the Bank accounts page so imports and ERPNext postings land on the right account.", "warn");
+    $("#pdf-form").bank_account_id.addEventListener("change", (e) => {
+      const a = accounts.find(a => a.id == e.target.value);
+      if (a && [...$("#pdf-form").bank_name.options].some(o => o.value === a.bank_name)) $("#pdf-form").bank_name.value = a.bank_name;
+    });
 
     async function refresh() {
       const s = await api.gmailStatus();
       $("#status").textContent = s.connected ? `Connected since ${String(s.connected_since).slice(0, 10)}` :
         s.configured ? "Not connected" : "Google OAuth isn't configured on the server.";
       $("#btn-connect").hidden = s.connected || !s.configured;
-      $("#btn-import").hidden = $("#btn-disconnect").hidden = !s.connected;
+      $("#btn-fetch").hidden = $("#btn-disconnect").hidden = !s.connected;
     }
-
     async function loadJobs() {
       const jobs = await api.pdfJobs();
       const kind = { done: "ok", failed: "err" };
@@ -89,31 +93,24 @@
 
     action($("#btn-connect"), async () => { location.href = (await api.gmailConnect()).auth_url; });
     action($("#btn-disconnect"), async () => { await api.gmailDisconnect(); flash("Gmail disconnected."); refresh(); });
-    action($("#btn-import"), async () => {
+    action($("#btn-fetch"), async () => {
       flash("Searching Gmail…", "warn");
-      flash((await api.importStatements()).message + " Parse them on the Statements page.");
+      flash((await api.gmailFetch()).message + " Review them on the Statements page.");
     });
 
     onSubmit($("#pdf-form"), async (_, e) => {
       const { job_id } = await api.uploadPdf(new FormData(e.target));
       const out = $("#pdf-progress");
       const job = await poll(() => api.pdfStatus(job_id), s => ["done", "failed"].includes(s.status), s => {
-        out.innerHTML = `<div class="msg warn">${esc(s.status)} — ${s.processed_files}/${s.total_files} files, ${s.transactions_saved} saved, ${s.transactions_skipped} duplicates skipped</div>`;
+        out.innerHTML = `<div class="msg warn">${esc(s.status)} — ${s.processed_files}/${s.total_files} files, ${s.transactions_saved} saved</div>`;
       });
-      out.innerHTML = `<div class="msg ${job.status === "done" ? "ok" : "err"}">${job.status === "done" ? "Done" : "Failed"} — ${job.transactions_saved} transactions saved, ${job.transactions_skipped} skipped.${job.error_message ? " " + esc(job.error_message) : ""}</div>`;
+      out.innerHTML = `<div class="msg ${job.status === "done" ? "ok" : "err"}">${job.status === "done" ? "Done" : "Failed"} — ${job.transactions_saved} transactions saved, ${job.transactions_skipped} duplicates skipped.${job.error_message ? " " + esc(job.error_message) : ""}</div>`;
       e.target.reset();
       loadJobs();
     });
-
     onSubmit($("#csv-form"), async (_, e) => {
-      const fd = new FormData(e.target);
-      fd.set("create_statement", e.target.elements.create_statement.checked ? "on" : "");
-      flash((await api.uploadCsv(fd)).message);
-      e.target.reset();
-    });
-    onSubmit($("#bulk-form"), async (_, e) => {
-      const r = await api.bulkCsv(new FormData(e.target));
-      flash(r.message + (r.errors.length ? " Errors: " + r.errors.join("; ") : ""), r.errors.length ? "warn" : "ok");
+      const r = await api.uploadCsv(new FormData(e.target));
+      flash(r.message + (r.errors.length ? " Problems: " + r.errors.join("; ") : ""), r.errors.length ? "warn" : "ok");
       e.target.reset();
     });
     $("#template").addEventListener("click", (e) => {

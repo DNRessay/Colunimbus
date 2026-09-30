@@ -9,7 +9,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import BankTransaction, EmailStatement, UserGmailToken, utcnow
+from ..models import BankAccount, BankTransaction, Client, EmailStatement, UserGmailToken, utcnow
+from ..security import unseal
 from .imports import save_csv_rows, save_pdf_rows
 from .parsers import parse_csv, parse_pdf
 
@@ -117,7 +118,7 @@ class Gmail:
                     return base64.urlsafe_b64decode(data.encode()), part["filename"]
         return None, None
 
-    def fetch_statements(self, user_id):
+    def fetch_statements(self, practice_id):
         ids = []
         for q in SEARCHES:
             try:
@@ -133,7 +134,9 @@ class Gmail:
                 skipped += 1
                 continue
             try:
-                self.db.add(self._statement_from(user_id, self.message(msg_id)))
+                st = self._statement_from(practice_id, self.message(msg_id))
+                guess_client(self.db, st)
+                self.db.add(st)
                 self.db.commit()
                 imported += 1
             except Exception as e:
@@ -141,7 +144,7 @@ class Gmail:
                 log.error("Error importing message %s: %s", msg_id, e)
         return imported, skipped
 
-    def _statement_from(self, user_id, msg):
+    def _statement_from(self, practice_id, msg):
         payload = msg.get("payload", {})
         headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
         sender = headers.get("from", "Unknown")
@@ -150,7 +153,7 @@ class Gmail:
         except (TypeError, ValueError):
             received = utcnow()
 
-        body_text = body_html = ""
+        body_text = ""
         has_attachment = False
         for part in walk_parts(payload):
             name = (part.get("filename") or "").lower()
@@ -160,17 +163,15 @@ class Gmail:
             if not data or name:
                 continue
             decoded = base64.urlsafe_b64decode(data.encode()).decode("utf-8", errors="ignore")
-            if part.get("mimeType") == "text/html":
-                body_html = decoded
-            elif part.get("mimeType") == "text/plain":
+            if part.get("mimeType") == "text/plain":
                 body_text = decoded
 
         low = sender.lower()
         bank = "tymebank" if "tymebank" in low else "capitec" if "capitec" in low else "other"
         return EmailStatement(
-            user_id=user_id, gmail_id=msg["id"], thread_id=msg.get("threadId", ""),
+            practice_id=practice_id, source="gmail", gmail_id=msg["id"],
             subject=headers.get("subject", "No Subject")[:500], sender=sender[:255], received_date=received,
-            bank_name=bank, body_text=body_text, body_html=body_html, has_pdf=has_attachment, state="new",
+            bank_name=bank, body_text=body_text[:20000], has_attachment=has_attachment, state="new",
         )
 
     def parse_pdf_statement(self, st: EmailStatement, password=None):
@@ -179,8 +180,8 @@ class Gmail:
             pdf, _ = self.find_attachment(st.gmail_id, ".pdf")
             if not pdf:
                 raise ValueError("No PDF attachment found")
-            rows = parse_pdf(pdf, st.bank_name, password or st.pdf_password or None)
-            saved, _ = save_pdf_rows(self.db, st.user_id, rows, st.id)
+            rows = parse_pdf(pdf, st.bank_name, password or unseal(st.pdf_password) or None)
+            saved, _ = save_pdf_rows(self.db, st.client_id, rows, st.id, st.bank_account_id)
             self._mark_parsed(st, saved)
             return saved
         except Exception as e:
@@ -196,7 +197,7 @@ class Gmail:
             rows = parse_csv(data)
             if not rows:
                 raise ValueError("CSV parsed but no transactions found")
-            imported, skipped = save_csv_rows(self.db, st.user_id, rows, st.id)
+            imported, skipped = save_csv_rows(self.db, st.client_id, rows, st.id, st.bank_account_id)
             self._mark_parsed(st, imported)
             return imported, skipped
         except Exception as e:
@@ -205,8 +206,6 @@ class Gmail:
 
     def _mark_parsed(self, st, count):
         st.state = "parsed"
-        st.has_pdf = True
-        st.is_processed = True
         st.processed_date = utcnow()
         st.transaction_count = count
         st.error_message = ""
@@ -218,6 +217,21 @@ class Gmail:
         st.state = "error"
         st.error_message = str(err)
         self.db.commit()
+
+
+def guess_client(db: Session, st: EmailStatement):
+    """Assign a Gmail statement to a client when a known account number appears in the email."""
+    text = f"{st.subject} {st.body_text}".replace(" ", "")
+    rows = db.execute(select(BankAccount, Client).join(Client, BankAccount.client_id == Client.id)
+                      .where(Client.practice_id == st.practice_id, BankAccount.account_number != ""))
+    for ba, client in rows:
+        digits = ba.account_number.replace(" ", "")
+        if len(digits) >= 4 and digits[-4:] in text:
+            st.client_id, st.bank_account_id = client.id, ba.id
+            if ba.bank_name:
+                st.bank_name = ba.bank_name
+            return True
+    return False
 
 
 def walk_parts(part):

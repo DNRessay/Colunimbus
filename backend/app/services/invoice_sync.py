@@ -5,31 +5,33 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import ERPNextConfig, ERPNextInvoice
-from .erpnext import ERPNextClient
+from ..models import Client, ERPNextInvoice
+from .erpnext import ERPNextClient, active_config
 
 
 def _date(v):
     return date.fromisoformat(str(v)) if v else None
 
 
-def sync_period(db: Session, user_id: int, year: int, month: int):
-    config = db.scalar(select(ERPNextConfig).where(ERPNextConfig.user_id == user_id, ERPNextConfig.is_active.is_(True)))
+def sync_period(db: Session, client: Client, year: int, month: int):
+    config = active_config(db, client.practice_id)
     if not config:
-        raise ValueError("No active ERPNext config found.")
-    client = ERPNextClient(config)
+        raise ValueError("No active ERPNext connection.")
+    if not client.erpnext_company:
+        raise ValueError("Set this company's ERPNext company first.")
+    api = ERPNextClient(config, client)
     start, end = f"{year}-{month:02d}-01", f"{year}-{month:02d}-{monthrange(year, month)[1]:02d}"
 
     result = {}
     for kind, doctype, party in (("sales", "Sales Invoice", "customer"), ("purchase", "Purchase Invoice", "supplier")):
-        rows = client.fetch_invoices(doctype, start, end)
+        rows = api.fetch_invoices(doctype, start, end)
         created = updated = 0
         for d in rows:
-            inv = db.scalar(select(ERPNextInvoice).where(ERPNextInvoice.user_id == user_id, ERPNextInvoice.erp_name == d["name"]))
+            inv = db.scalar(select(ERPNextInvoice).where(ERPNextInvoice.client_id == client.id, ERPNextInvoice.erp_name == d["name"]))
             if inv:
                 updated += 1
             else:
-                inv = ERPNextInvoice(user_id=user_id, erp_name=d["name"])
+                inv = ERPNextInvoice(client_id=client.id, erp_name=d["name"])
                 db.add(inv)
                 created += 1
             inv.invoice_type = kind

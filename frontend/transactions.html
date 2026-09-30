@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Transactions — L-Suite</title>
+  <title>Transactions — Colunimbus</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
@@ -30,7 +30,7 @@
   <script type="module">
     import { api } from "/js/api.js";
     import { $, $$, amountCell, empty, esc, flash, page, syncBadge } from "/js/ui.js";
-    page();
+    await page();
 
     let categories = [], accounts = [];
     const options = (list, selected, label) => `<option value="">— none —</option>` +
@@ -71,6 +71,8 @@
       }));
     }
 
+    const preset = new URLSearchParams(location.search).get("filter");
+    if (preset) $("#filter").value = preset;
     try {
       [categories, accounts] = await Promise.all([api.categories(), api.accounts()]);
       $("#account").innerHTML += accounts.map(a => `<option value="${a.id}">${esc(a.account_name)}</option>`).join("");

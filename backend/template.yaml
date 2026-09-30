@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: L-Suite API (FastAPI on Lambda via Function URL) + async worker Lambda
+Description: Colunimbus API (FastAPI on Lambda via Function URL) + async worker Lambda
 
 Parameters:
   SecretKey:
@@ -10,7 +10,7 @@ Parameters:
   DatabaseUrl:
     Type: String
     NoEcho: true
-    Description: mysql://user:pass@host:port/db or postgres://...
+    Description: Neon pooled URL, e.g. postgresql://user:pass@ep-xxx-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require
   FrontendUrl:
     Type: String
     Default: https://lsuite-frontend.pages.dev

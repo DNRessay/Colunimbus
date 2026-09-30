@@ -3,16 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Register — L-Suite</title>
+  <title>Register — Colunimbus</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
   <main class="narrow">
     <div class="card">
-      <h1>Create an account</h1>
+      <h1>Set up your organisation</h1>
       <div id="msg"></div>
       <form id="form">
+        <div class="field"><label>Organisation / group name</label><input name="practice_name" placeholder="e.g. Mokoena Group" /></div>
         <div class="fields">
           <div class="field"><label>First name</label><input name="first_name" required /></div>
           <div class="field"><label>Last name</label><input name="last_name" required /></div>
@@ -22,7 +23,7 @@
         <div class="field"><label>Password</label><input name="password" type="password" required minlength="8" autocomplete="new-password" /></div>
         <button type="submit" style="width:100%">Register</button>
       </form>
-      <p class="muted" style="font-size:0.85rem">Already have an account? <a href="/login.html">Log in</a></p>
+      <p class="muted" style="font-size:0.85rem">Joining an existing organisation? Ask its owner to add you under Settings. · <a href="/login.html">Log in</a></p>
     </div>
   </main>
   <script type="module">
@@ -33,7 +34,7 @@
       try {
         const r = await api.register(d);
         tokens.set(r.access, r.refresh);
-        location.href = "/complete-profile.html";
+        location.href = "/companies.html?first=1";
       } catch (e) { flash(e.message, "err"); }
     });
   </script>

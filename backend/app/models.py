@@ -1,14 +1,15 @@
-# Table and column names match the previous Django schema so an existing
-# database can be reused as-is. Only `lsuite_jobs` is new.
-from calendar import month_name
+# Practice (the organisation using the app, e.g. a group of companies) -> Client (one business entity
+# whose books are kept; shown as "Company" in the UI). Users belong to a practice. Bank data,
+# reconciliation and ERPNext sync belong to a client, and each client maps to one ERPNext Company.
 import datetime as dt
+from calendar import month_name
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
-    JSON, BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, Numeric,
-    String, Text, UniqueConstraint,
+    JSON, BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,6 +35,10 @@ def text(length=None, default=""):
     return mapped_column(String(length) if length else Text, default=default, nullable=False)
 
 
+def flag(default):
+    return mapped_column(Boolean, default=default, nullable=False)
+
+
 def created():
     return mapped_column(DateTime, default=utcnow, nullable=False)
 
@@ -42,86 +47,66 @@ def updated():
     return mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class Practice(Base):
+    __tablename__ = "practices"
+    id: Mapped[int] = pk()
+    name: Mapped[str] = text(200)
+    created_at: Mapped[datetime] = created()
+
+
 class User(Base):
-    __tablename__ = "auth_user"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    password: Mapped[str] = text(128)
-    last_login: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    __tablename__ = "users"
+    id: Mapped[int] = pk()
+    practice_id: Mapped[int] = fk("practices.id")
+    role: Mapped[str] = text(20, "bookkeeper")  # owner | bookkeeper
     username: Mapped[str] = mapped_column(String(150), unique=True, nullable=False)
+    email: Mapped[str] = text(254)
     first_name: Mapped[str] = text(150)
     last_name: Mapped[str] = text(150)
-    email: Mapped[str] = text(254)
-    is_staff: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    password: Mapped[str] = text(128)
+    is_active: Mapped[bool] = flag(True)
+    last_login: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     date_joined: Mapped[datetime] = created()
 
-    profile: Mapped[Optional["UserProfile"]] = relationship(back_populates="user", uselist=False)
+    @property
+    def is_owner(self):
+        return self.role == "owner"
 
 
-def user_fk():
-    return mapped_column(Integer, ForeignKey("auth_user.id", ondelete="CASCADE"), nullable=False, index=True)
-
-
-class UserProfile(Base):
-    __tablename__ = "authusers_userprofile"
+class Client(Base):
+    __tablename__ = "clients"
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_user.id", ondelete="CASCADE"), unique=True, nullable=False)
-    phone: Mapped[str] = text(30)
-    date_of_birth: Mapped[Optional[dt.date]] = mapped_column(Date, nullable=True)
-    id_number: Mapped[str] = text(20)
-    city: Mapped[str] = text(100)
-    province: Mapped[str] = text(100)
-    country: Mapped[str] = text(100)
-    occupation: Mapped[str] = text(100)
-    years_experience: Mapped[str] = text(10)
-    industry: Mapped[str] = text(100)
-    linkedin_url: Mapped[str] = text(200)
-    github_url: Mapped[str] = text(200)
-    portfolio_url: Mapped[str] = text(200)
+    practice_id: Mapped[int] = fk("practices.id")
+    name: Mapped[str] = text(200)
+    registration_number: Mapped[str] = text(50)
+    vat_number: Mapped[str] = text(20)
+    vat_registered: Mapped[bool] = flag(False)
+    year_end_month: Mapped[int] = mapped_column(Integer, default=2, nullable=False)  # SA default: February
+    contact_email: Mapped[str] = text(254)
+    notes: Mapped[str] = text()
+    erpnext_company: Mapped[str] = text(200)
+    erpnext_bank_account: Mapped[str] = text(200)  # fallback when a bank account has no mapping
+    erpnext_cost_center: Mapped[str] = text(200)
+    is_active: Mapped[bool] = flag(True)
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = updated()
 
-    user: Mapped[User] = relationship(back_populates="profile")
 
-
-PLATFORM_ICONS = {
-    "linkedin": "🔗", "github": "🐙", "twitter": "🐦", "instagram": "📷",
-    "facebook": "📘", "youtube": "▶️", "tiktok": "🎵", "behance": "🎨",
-    "dribbble": "🏀", "stackoverflow": "📚", "kaggle": "📊", "medium": "✍️",
-    "substack": "📬", "portfolio": "🌐",
-}
-
-
-class SocialLink(Base):
-    __tablename__ = "authusers_sociallink"
-    id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
-    platform: Mapped[str] = text(80)
-    url: Mapped[str] = text(500)
-    icon: Mapped[str] = text(10)
-    created_at: Mapped[datetime] = created()
-
-    @property
-    def display_icon(self):
-        if self.icon:
-            return self.icon
-        key = self.platform.lower().split("/")[0].replace(" ", "").strip()
-        return next((v for k, v in PLATFORM_ICONS.items() if k in key), "🔗")
+def client_fk():
+    return fk("clients.id")
 
 
 class BankAccount(Base):
     __tablename__ = "bank_accounts"
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
+    client_id: Mapped[int] = client_fk()
     account_name: Mapped[str] = text(200)
     account_number: Mapped[str] = text(100)
     bank_name: Mapped[str] = text(100)
     account_type: Mapped[str] = text(50)
     currency: Mapped[str] = text(3, "ZAR")
-    balance: Mapped[Decimal] = mapped_column(Money, default=0, nullable=False)
     erpnext_account: Mapped[str] = text(200)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool] = flag(True)
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = updated()
 
@@ -131,14 +116,18 @@ def _csv_list(value):
 
 
 class TransactionCategory(Base):
+    """Shared across a practice's clients so merchant keywords learned on one client help the others.
+    The ERPNext account differs per client (company), so it lives in CategoryAccount."""
+
     __tablename__ = "transaction_categories"
+    __table_args__ = (UniqueConstraint("practice_id", "name"),)
     id: Mapped[int] = pk()
-    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    erpnext_account: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    transaction_type: Mapped[str] = text(20)
+    practice_id: Mapped[int] = fk("practices.id")
+    name: Mapped[str] = text(100)
+    transaction_type: Mapped[str] = text(20, "debit")  # debit | credit | any
     keywords: Mapped[str] = text()
     tags: Mapped[str] = text()
-    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    active: Mapped[bool] = flag(True)
     color: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = created()
 
@@ -152,141 +141,77 @@ class TransactionCategory(Base):
 
     def add_keyword(self, word):
         word = (word or "").strip().lower()
-        existing = self.keywords_list
-        if word and word not in existing:
-            self.keywords = ",".join(existing + [word])
+        if word and word not in self.keywords_list:
+            self.keywords = ",".join(self.keywords_list + [word])
 
     def add_tag(self, word):
         word = (word or "").strip().lower()
-        existing = self.tags_list
-        if word and word not in existing:
-            self.tags = ",".join(existing + [word])
+        if word and word not in self.tags_list:
+            self.tags = ",".join(self.tags_list + [word])
 
     def match(self, description):
-        """Returns the keyword/tag that matched, or None."""
         desc = (description or "").lower()
         if not desc:
             return None
         return next((w for w in self.keywords_list + self.tags_list if w in desc), None)
 
 
-class EmailStatement(Base):
-    __tablename__ = "email_statements"
+class CategoryAccount(Base):
+    """Which ERPNext account a category posts to for one client."""
+
+    __tablename__ = "category_accounts"
+    __table_args__ = (UniqueConstraint("client_id", "category_id"),)
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
+    client_id: Mapped[int] = client_fk()
+    category_id: Mapped[int] = fk("transaction_categories.id")
+    erpnext_account: Mapped[str] = text(200)
+
+
+class EmailStatement(Base):
+    __tablename__ = "statements"
+    id: Mapped[int] = pk()
+    practice_id: Mapped[int] = fk("practices.id")
+    client_id: Mapped[Optional[int]] = fk("clients.id", "CASCADE", True)  # null = unassigned inbox item
+    bank_account_id: Mapped[Optional[int]] = fk("bank_accounts.id", "SET NULL", True)
+    source: Mapped[str] = text(20, "upload")  # gmail | upload
     gmail_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    thread_id: Mapped[str] = text(255)
     subject: Mapped[str] = text(500)
     sender: Mapped[str] = text(255)
     received_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
-    statement_date: Mapped[Optional[dt.date]] = mapped_column(Date, nullable=True)
     bank_name: Mapped[str] = text(100)
-    account_number: Mapped[str] = text(100)
-    has_pdf: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_attachment: Mapped[bool] = flag(False)
     pdf_password: Mapped[str] = text(100)
-    state: Mapped[str] = text(50, "new")
-    is_processed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    state: Mapped[str] = text(50, "new")  # new | parsed | error
     processed_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     transaction_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     body_text: Mapped[str] = text()
-    body_html: Mapped[str] = text()
     error_message: Mapped[str] = text()
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = updated()
 
 
-class Invoice(Base):
-    __tablename__ = "invoices"
-    id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
-    invoice_number: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    invoice_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
-    due_date: Mapped[Optional[dt.date]] = mapped_column(Date, nullable=True)
-    customer_name: Mapped[str] = text(200)
-    customer_email: Mapped[str] = text(254)
-    customer_address: Mapped[str] = text()
-    subtotal: Mapped[Decimal] = mapped_column(Money, default=0, nullable=False)
-    tax_amount: Mapped[Decimal] = mapped_column(Money, default=0, nullable=False)
-    tax_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0, nullable=False)
-    discount_amount: Mapped[Decimal] = mapped_column(Money, default=0, nullable=False)
-    total_amount: Mapped[Decimal] = mapped_column(Money, default=0, nullable=False)
-    paid_amount: Mapped[Decimal] = mapped_column(Money, default=0, nullable=False)
-    outstanding_amount: Mapped[Decimal] = mapped_column(Money, default=0, nullable=False)
-    currency: Mapped[str] = text(3, "ZAR")
-    status: Mapped[str] = text(50, "draft")
-    erpnext_id: Mapped[str] = text(100)
-    erpnext_synced: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    erpnext_sync_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    notes: Mapped[str] = text()
-    terms: Mapped[str] = text()
-    created_at: Mapped[datetime] = created()
-    updated_at: Mapped[datetime] = updated()
-
-    items: Mapped[list["InvoiceItem"]] = relationship(
-        back_populates="invoice", cascade="all, delete-orphan", order_by="InvoiceItem.id"
-    )
-
-    @property
-    def is_paid(self):
-        return (self.outstanding_amount or 0) <= 0
-
-    @property
-    def is_overdue(self):
-        return bool(self.due_date and self.status not in ("paid", "cancelled") and date.today() > self.due_date)
-
-    def calculate_totals(self):
-        cents = Decimal("0.01")
-        for item in self.items:
-            item.total = (Decimal(item.quantity or 0) * Decimal(item.unit_price or 0)).quantize(cents)
-        self.subtotal = sum((i.total for i in self.items), Decimal("0")).quantize(cents)
-        self.tax_amount = (self.subtotal * Decimal(self.tax_rate or 0) / 100).quantize(cents)
-        self.total_amount = (self.subtotal + self.tax_amount - Decimal(self.discount_amount or 0)).quantize(cents)
-        self.outstanding_amount = (self.total_amount - Decimal(self.paid_amount or 0)).quantize(cents)
-
-
-class InvoiceItem(Base):
-    __tablename__ = "invoice_items"
-    id: Mapped[int] = pk()
-    invoice_id: Mapped[int] = fk("invoices.id")
-    item_code: Mapped[str] = text(100)
-    description: Mapped[str] = text(500)
-    quantity: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=1, nullable=False)
-    unit_price: Mapped[Decimal] = mapped_column(Money, nullable=False)
-    total: Mapped[Decimal] = mapped_column(Money, default=0, nullable=False)
-    notes: Mapped[str] = text(500)
-    created_at: Mapped[datetime] = created()
-
-    invoice: Mapped[Invoice] = relationship(back_populates="items")
-
-
 class BankTransaction(Base):
     __tablename__ = "bank_transactions"
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
+    client_id: Mapped[int] = client_fk()
     bank_account_id: Mapped[Optional[int]] = fk("bank_accounts.id", "SET NULL", True)
-    statement_id: Mapped[Optional[int]] = fk("email_statements.id", "SET NULL", True)
-    invoice_id: Mapped[Optional[int]] = fk("invoices.id", "SET NULL", True)
+    statement_id: Mapped[Optional[int]] = fk("statements.id", "SET NULL", True)
+    category_id: Mapped[Optional[int]] = fk("transaction_categories.id", "SET NULL", True)
     date: Mapped[dt.date] = mapped_column(Date, nullable=False, index=True)
-    transaction_type: Mapped[str] = text(100)
-    amount: Mapped[Optional[Decimal]] = mapped_column(Money, nullable=True)
-    fee: Mapped[Optional[Decimal]] = mapped_column(Money, nullable=True)
     posting_date: Mapped[Optional[dt.date]] = mapped_column(Date, nullable=True)
+    transaction_type: Mapped[str] = text(20)  # debit | credit
     description: Mapped[str] = text(500)
     reference_number: Mapped[str] = text(100)
+    amount: Mapped[Optional[Decimal]] = mapped_column(Money, nullable=True)
     deposit: Mapped[Optional[Decimal]] = mapped_column(Money, nullable=True)
     withdrawal: Mapped[Optional[Decimal]] = mapped_column(Money, nullable=True)
+    fee: Mapped[Optional[Decimal]] = mapped_column(Money, nullable=True)
     balance: Mapped[Optional[Decimal]] = mapped_column(Money, nullable=True)
     currency: Mapped[str] = text(3, "ZAR")
-    unallocated_amount: Mapped[Optional[Decimal]] = mapped_column(Money, nullable=True)
-    category_id: Mapped[Optional[int]] = fk("transaction_categories.id", "SET NULL", True)
-    tags: Mapped[str] = text(500)
+    tags: Mapped[str] = text(500)  # e.g. the bank's own category label
     notes: Mapped[str] = text()
-    is_categorized: Mapped[str] = text()
-    is_reconciled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    reconciled_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     recon_status: Mapped[str] = text(20, "unreconciled")
-    erpnext_id: Mapped[str] = text(100)
-    erpnext_synced: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    erpnext_synced: Mapped[bool] = flag(False)
     erpnext_sync_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     erpnext_journal_entry: Mapped[str] = text(100)
     erpnext_error: Mapped[str] = text()
@@ -305,7 +230,6 @@ class BankTransaction(Base):
 
     @property
     def direction(self):
-        """'credit' or 'debit' regardless of which importer created the row."""
         if self.transaction_type in ("credit", "debit"):
             return self.transaction_type
         return "credit" if (self.deposit or 0) > 0 else "debit"
@@ -319,17 +243,16 @@ class BankTransaction(Base):
 
 
 class ERPNextConfig(Base):
+    """The practice's ERPNext site. One active per practice; companies inside it map to clients."""
+
     __tablename__ = "erpnext_configs"
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
+    practice_id: Mapped[int] = fk("practices.id")
     name: Mapped[str] = text(100)
     base_url: Mapped[str] = text(255)
     api_key: Mapped[str] = text(255)
     api_secret: Mapped[str] = text(255)
-    default_company: Mapped[str] = text(200)
-    bank_account: Mapped[str] = text(200)
-    default_cost_center: Mapped[str] = text(200)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool] = flag(True)
     last_sync: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = updated()
@@ -338,9 +261,10 @@ class ERPNextConfig(Base):
 class ERPNextSyncLog(Base):
     __tablename__ = "erpnext_sync_logs"
     id: Mapped[int] = pk()
-    config_id: Mapped[int] = fk("erpnext_configs.id")
+    client_id: Mapped[int] = client_fk()
+    config_id: Mapped[Optional[int]] = fk("erpnext_configs.id", "SET NULL", True)
     record_type: Mapped[str] = text(50)
-    record_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    record_id: Mapped[int] = mapped_column(BigId, nullable=False)
     erpnext_doctype: Mapped[str] = text(100)
     erpnext_doc_name: Mapped[str] = text(200)
     status: Mapped[str] = text(20)
@@ -351,11 +275,12 @@ class ERPNextSyncLog(Base):
 class PDFImportJob(Base):
     __tablename__ = "pdf_import_jobs"
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
+    client_id: Mapped[int] = client_fk()
+    bank_account_id: Mapped[Optional[int]] = fk("bank_accounts.id", "SET NULL", True)
     filename: Mapped[str] = text(255)
     bank_name: Mapped[str] = text(100, "capitec")
     pdf_password: Mapped[str] = text(100)
-    status: Mapped[str] = text(20, "pending")
+    status: Mapped[str] = text(20, "pending")  # pending | processing | done | failed
     progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_files: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     processed_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -363,7 +288,7 @@ class PDFImportJob(Base):
     transactions_saved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     transactions_skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str] = text()
-    statement_id: Mapped[Optional[int]] = fk("email_statements.id", "SET NULL", True)
+    statement_id: Mapped[Optional[int]] = fk("statements.id", "SET NULL", True)
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = updated()
 
@@ -371,20 +296,20 @@ class PDFImportJob(Base):
 class UserGmailToken(Base):
     __tablename__ = "user_gmail_tokens"
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_user.id", ondelete="CASCADE"), unique=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(BigId, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     access_token: Mapped[str] = text()
     refresh_token: Mapped[str] = text()
     token_expiry: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    is_connected: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_connected: Mapped[bool] = flag(True)
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = updated()
 
 
 class ERPNextInvoice(Base):
-    __tablename__ = "invoices_erpnextinvoice"
-    __table_args__ = (UniqueConstraint("user_id", "erp_name"),)
+    __tablename__ = "erpnext_invoices"
+    __table_args__ = (UniqueConstraint("client_id", "erp_name"),)
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
+    client_id: Mapped[int] = client_fk()
     invoice_type: Mapped[str] = text(20)
     erp_name: Mapped[str] = text(100)
     erp_status: Mapped[str] = text(50, "Unpaid")
@@ -414,10 +339,10 @@ class ERPNextInvoice(Base):
 
 
 class ERPNextJournalEntry(Base):
-    __tablename__ = "reconciliation_erpnextjournalentry"
-    __table_args__ = (UniqueConstraint("user_id", "je_name"),)
+    __tablename__ = "erpnext_journal_entries"
+    __table_args__ = (UniqueConstraint("client_id", "je_name"),)
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
+    client_id: Mapped[int] = client_fk()
     je_name: Mapped[str] = text(100)
     posting_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
@@ -428,14 +353,14 @@ class ERPNextJournalEntry(Base):
 
 
 class ReconciliationMatch(Base):
-    __tablename__ = "reconciliation_reconciliationmatch"
+    __tablename__ = "reconciliation_matches"
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
+    client_id: Mapped[int] = client_fk()
     transaction_id: Mapped[int] = mapped_column(
         BigId, ForeignKey("bank_transactions.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    journal_entry_id: Mapped[Optional[int]] = fk("reconciliation_erpnextjournalentry.id", "SET NULL", True)
-    status: Mapped[str] = text(20, "matched")
+    journal_entry_id: Mapped[Optional[int]] = fk("erpnext_journal_entries.id", "SET NULL", True)
+    status: Mapped[str] = text(20, "matched")  # matched | flagged | manual
     flag_reason: Mapped[str] = text()
     matched_at: Mapped[datetime] = created()
     matched_by: Mapped[str] = text(20, "auto")
@@ -445,10 +370,10 @@ class ReconciliationMatch(Base):
 
 
 class ReconciliationPeriod(Base):
-    __tablename__ = "reconciliation_reconciliationperiod"
-    __table_args__ = (UniqueConstraint("user_id", "year", "month"),)
+    __tablename__ = "reconciliation_periods"
+    __table_args__ = (UniqueConstraint("client_id", "year", "month"),)
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
+    client_id: Mapped[int] = client_fk()
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = text(10, "open")
@@ -470,9 +395,11 @@ class ReconciliationPeriod(Base):
 class Job(Base):
     """Background work (AI categorization, ERPNext bulk sync) run by the worker Lambda."""
 
-    __tablename__ = "lsuite_jobs"
+    __tablename__ = "jobs"
     id: Mapped[int] = pk()
-    user_id: Mapped[int] = user_fk()
+    practice_id: Mapped[int] = fk("practices.id")
+    client_id: Mapped[Optional[int]] = fk("clients.id", "CASCADE", True)
+    user_id: Mapped[Optional[int]] = fk("users.id", "SET NULL", True)
     kind: Mapped[str] = text(40)
     status: Mapped[str] = text(20, "queued")  # queued | in_progress | completed
     conclusion: Mapped[str] = text(20)  # success | failure

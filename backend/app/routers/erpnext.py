@@ -1,14 +1,13 @@
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..deps import current_user, get_db, get_owned
+from ..deps import Ctx, client_ctx, current_user, get_db, get_owned
 from ..jobs import start_job
 from ..models import BankTransaction, ERPNextConfig, Job, User
-from ..schemas import BankAccountOut, CategoryOut, ERPNextConfigOut
+from ..schemas import BankAccountOut, CategoryOut
 from ..services import erpnext
 from ..services.erpnext import ERPNextClient
 
@@ -16,19 +15,15 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/erpnext", tags=["erpnext"])
 
 
-def active_config(db, user, required=True):
-    cfg = db.scalar(select(ERPNextConfig).where(ERPNextConfig.user_id == user.id, ERPNextConfig.is_active.is_(True)))
-    if not cfg and required:
-        raise HTTPException(400, "No active ERPNext configuration.")
+def config_for(db, practice_id):
+    cfg = erpnext.active_config(db, practice_id)
+    if not cfg:
+        raise HTTPException(400, "No ERPNext connection yet. Add one under Settings.")
     return cfg
 
 
-def pick_config(db, user, config_id: Optional[int]):
-    if config_id:
-        cfg = db.get(ERPNextConfig, config_id)
-        if cfg and cfg.user_id == user.id:
-            return cfg
-    return active_config(db, user)
+def api_for(db, ctx: Ctx):
+    return ERPNextClient(config_for(db, ctx.client.practice_id), ctx.client)
 
 
 @router.post("/configs/{cfg_id}/test")
@@ -37,99 +32,77 @@ def test_config(cfg_id: int, user: User = Depends(current_user), db: Session = D
     return {"success": ok, "message": msg}
 
 
-@router.post("/configs/{cfg_id}/activate")
-def activate_config(cfg_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    cfg = get_owned(db, ERPNextConfig, cfg_id, user)
-    for other in db.scalars(select(ERPNextConfig).where(ERPNextConfig.user_id == user.id)):
-        other.is_active = other.id == cfg.id
-    db.commit()
-    return {"message": f'"{cfg.name}" is now active.'}
+@router.get("/companies")
+def companies(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """ERPNext companies, for linking each company in the app to one in ERPNext."""
+    return {"companies": ERPNextClient(config_for(db, user.practice_id)).get_companies()}
+
+
+@router.get("/accounts")
+def accounts(ctx: Ctx = Depends(client_ctx), db: Session = Depends(get_db)):
+    raw = api_for(db, ctx).get_chart_of_accounts()
+    if not raw:
+        raise HTTPException(502, "No accounts returned from ERPNext. Check the company link.")
+    out = sorted(
+        ({"name": a["name"], "account_name": a.get("account_name") or a["name"],
+          "account_type": a.get("account_type") or "", "root_type": a.get("root_type") or "",
+          "is_group": bool(a.get("is_group"))} for a in raw),
+        key=lambda a: (a["root_type"], a["name"]),
+    )
+    return {"accounts": out, "count": len(out)}
+
+
+@router.get("/cost-centers")
+def cost_centers(ctx: Ctx = Depends(client_ctx), db: Session = Depends(get_db)):
+    return {"cost_centers": api_for(db, ctx).get_cost_centers()}
 
 
 @router.post("/transactions/{txn_id}/sync")
-def sync_transaction(txn_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    txn = get_owned(db, BankTransaction, txn_id, user)
+def sync_transaction(txn_id: int, ctx: Ctx = Depends(client_ctx), db: Session = Depends(get_db)):
+    txn = get_owned(db, BankTransaction, txn_id, ctx)
     if not txn.category_id:
         raise HTTPException(400, "Transaction must be categorized first")
     try:
-        name = ERPNextClient(active_config(db, user)).create_journal_entry(db, txn)
+        name = api_for(db, ctx).create_journal_entry(db, txn)
     except Exception as e:
         raise HTTPException(502, str(e))
     return {"message": f"Synced: {name}", "journal_entry": name}
 
 
-@router.get("/fetch-accounts")
-def fetch_accounts(config_id: Optional[int] = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    raw = ERPNextClient(pick_config(db, user, config_id)).get_chart_of_accounts()
-    if not raw:
-        raise HTTPException(502, "No accounts returned from ERPNext.")
-    accounts = sorted(
-        ({"name": a["name"], "account_name": a.get("account_name") or a["name"],
-          "account_type": a.get("account_type") or "", "root_type": a.get("root_type") or "",
-          "company": a.get("company") or "", "is_group": bool(a.get("is_group"))} for a in raw),
-        key=lambda a: (a["root_type"], a["name"]),
-    )
-    return {"accounts": accounts, "count": len(accounts)}
-
-
-@router.get("/fetch-cost-centers")
-def fetch_cost_centers(config_id: Optional[int] = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return {"cost_centers": ERPNextClient(pick_config(db, user, config_id)).get_cost_centers()}
-
-
-@router.get("/fetch-companies")
-def fetch_companies(config_id: Optional[int] = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return {"companies": ERPNextClient(pick_config(db, user, config_id)).get_companies()}
-
-
-@router.post("/update-config-defaults")
-def update_defaults(company: str = Body("", embed=True), bank_account: str = Body("", embed=True),
-                    cost_center: str = Body("", embed=True), user: User = Depends(current_user),
-                    db: Session = Depends(get_db)):
-    cfg = active_config(db, user)
-    if not company.strip():
-        raise HTTPException(400, "Company is required")
-    resolved = ERPNextClient(cfg).resolve_company(company.strip())
-    cfg.default_company = resolved
-    cfg.bank_account = bank_account.strip()
-    cfg.default_cost_center = cost_center.strip()
-    db.commit()
-    note = f" (resolved from '{company}')" if resolved != company.strip() else ""
-    return {"message": f"Defaults saved. Company: {resolved}{note}", "resolved_company": resolved}
-
-
 @router.get("/sync-preflight")
-def preflight(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    cfg = active_config(db, user)
-    cats, banks = erpnext.missing_payload(db, user.id)
+def preflight(ctx: Ctx = Depends(client_ctx), db: Session = Depends(get_db)):
+    config_for(db, ctx.client.practice_id)
+    p = erpnext.preflight(db, ctx.client)
     return {
-        "config": ERPNextConfigOut.model_validate(cfg),
-        "missing_categories": [CategoryOut.model_validate(c) for c in cats],
-        "missing_bank_accounts": [BankAccountOut.model_validate(b) for b in banks],
-        "ready_count": erpnext.ready_count(db, user.id),
+        "company": ctx.client.erpnext_company,
+        "company_set": p["company_set"],
+        "default_bank_account": ctx.client.erpnext_bank_account,
+        "cost_center": ctx.client.erpnext_cost_center,
+        "needs_default_bank": p["needs_default_bank"],
+        "missing_categories": [CategoryOut.model_validate(c).model_copy(update={"erpnext_account": p["accounts"].get(c.id, "")})
+                               for c in p["missing_categories"]],
+        "missing_bank_accounts": [BankAccountOut.model_validate(b) for b in p["missing_bank_accounts"]],
+        "ready_count": p["ready_count"],
+        "pending_count": p["pending_count"],
     }
 
 
 @router.post("/sync-preflight", status_code=202)
-def submit_preflight(data: dict = Body(default_factory=dict), user: User = Depends(current_user),
+def submit_preflight(data: dict = Body(default_factory=dict), ctx: Ctx = Depends(client_ctx),
                      db: Session = Depends(get_db)):
-    """Saves the preflight form (config defaults + account mappings), then starts the sync job."""
-    cfg = active_config(db, user)
-    banks, cats = erpnext.apply_preflight(db, cfg, data)
-    job = start_job(db, user.id, "erpnext_sync", config_id=cfg.id)
-    return {"message": f"Saved ({banks} bank account(s), {cats} categories updated). Sync job started.",
-            "job_id": job.id}
-
-
-@router.post("/sync-now")
-def sync_now(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    ok, failed, total = erpnext.sync_all_ready(db, active_config(db, user))
-    return {"success": ok, "failed": failed, "total": total}
+    """Saves the account mappings from the preflight form, then starts the sync job."""
+    config_for(db, ctx.client.practice_id)
+    if not ctx.client.erpnext_company:
+        raise HTTPException(400, "Link this company to an ERPNext company first.")
+    updated = erpnext.apply_preflight(db, ctx.client, data)
+    job = start_job(db, ctx.user, ctx.client, "erpnext_sync")
+    return {"message": f"Saved {updated} account mapping(s). Sync started.", "job_id": job.id}
 
 
 @router.get("/sync-job-status")
-def sync_job_status(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    job = db.scalar(select(Job).where(Job.user_id == user.id, Job.kind == "erpnext_sync").order_by(Job.id.desc()).limit(1))
+def sync_job_status(ctx: Ctx = Depends(client_ctx), db: Session = Depends(get_db)):
+    job = db.scalar(select(Job).where(Job.client_id == ctx.client_id, Job.kind == "erpnext_sync")
+                    .order_by(Job.id.desc()).limit(1))
     if not job:
         return {"status": "no_runs"}
     return {"status": job.status, "conclusion": job.conclusion or None, "job_id": job.id, "message": job.message,

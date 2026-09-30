@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Companies — Colunimbus</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>Companies</h1>
+    <p class="muted">Each company has its own bank accounts, transactions and reconciliation, and posts to its own Company in ERPNext.</p>
+    <div id="msg"></div>
+    <div class="card table-wrap"><table>
+      <thead><tr><th>Name</th><th>ERPNext company</th><th>VAT</th><th>Year end</th><th>Active</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+
+    <div class="card">
+      <h3 id="form-title">Add a company</h3>
+      <form id="form">
+        <input type="hidden" name="id" />
+        <div class="fields">
+          <div class="field"><label>Name</label><input name="name" required placeholder="e.g. Mokoena Building & Carpentry" /></div>
+          <div class="field"><label>ERPNext company</label><select name="erpnext_company"><option value="">— not linked —</option></select></div>
+          <div class="field"><label>Registration number</label><input name="registration_number" /></div>
+          <div class="field"><label>VAT number</label><input name="vat_number" /></div>
+          <div class="field"><label>Financial year end</label><select name="year_end_month"></select></div>
+          <div class="field"><label>Contact email</label><input name="contact_email" type="email" /></div>
+        </div>
+        <label class="check"><input type="checkbox" name="vat_registered" /> VAT registered</label>
+        <div class="field"><label>Notes</label><textarea name="notes" rows="2"></textarea></div>
+        <div class="row"><button type="submit">Save</button><button type="button" id="cancel" class="secondary" hidden>Cancel</button></div>
+      </form>
+    </div>
+  </main>
+  <script type="module">
+    import { api, company } from "/js/api.js";
+    import { $, $$, badge, empty, esc, flash, onSubmit, page, param } from "/js/ui.js";
+    await page({ needsCompany: false });
+
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const form = $("#form");
+    form.year_end_month.innerHTML = MONTHS.map((m, i) => `<option value="${i + 1}" ${i === 1 ? "selected" : ""}>${m}</option>`).join("");
+    if (param("first")) flash("Add your companies first — e.g. the sales company and the building company.", "warn");
+
+    let rows = [];
+    const typeIt = () => { form.erpnext_company.outerHTML = `<input name="erpnext_company" placeholder="Connect ERPNext under Settings, or type the exact company name" />`; };
+    api.erpnextConfigs().then(async (configs) => {
+      if (!configs.some(c => c.is_active)) return typeIt();
+      const { companies } = await api.erpCompanies();
+      form.erpnext_company.innerHTML += companies.map(c => `<option value="${esc(c.name)}">${esc(c.name)} (${esc(c.abbr)})</option>`).join("");
+    }).catch(typeIt);
+
+    async function load() {
+      rows = await api.companies();
+      $("#rows").innerHTML = rows.map(c => `<tr>
+        <td><a href="#" class="use" data-id="${c.id}">${esc(c.name)}</a> ${String(c.id) === company.id ? badge("selected", "ok") : ""}</td>
+        <td>${esc(c.erpnext_company) || badge("not linked", "warn")}</td>
+        <td>${c.vat_registered ? esc(c.vat_number || "yes") : "—"}</td><td>${MONTHS[c.year_end_month - 1]}</td>
+        <td>${c.is_active ? "yes" : "no"}</td>
+        <td class="row"><button class="secondary small edit" data-id="${c.id}">Edit</button>
+          <button class="secondary small toggle" data-id="${c.id}">${c.is_active ? "Deactivate" : "Activate"}</button></td></tr>`).join("") || empty(6, "No companies yet.");
+      $$(".use").forEach(a => a.addEventListener("click", (e) => { e.preventDefault(); company.set(a.dataset.id); location.href = "/transactions.html"; }));
+      $$(".edit").forEach(b => b.addEventListener("click", () => edit(rows.find(c => c.id == b.dataset.id))));
+      $$(".toggle").forEach(b => b.addEventListener("click", async () => {
+        const c = rows.find(c => c.id == b.dataset.id);
+        try { await api.updateCompany(c.id, { is_active: !c.is_active }); location.reload(); } catch (e) { flash(e.message, "err"); }
+      }));
+    }
+
+    function edit(c) {
+      $("#form-title").textContent = `Edit ${c.name}`;
+      $("#cancel").hidden = false;
+      for (const k of ["id", "name", "registration_number", "vat_number", "year_end_month", "contact_email", "notes"]) form[k].value = c[k] ?? "";
+      if (c.erpnext_company && ![...(form.erpnext_company.options || [])].some(o => o.value === c.erpnext_company) && form.erpnext_company.tagName === "SELECT")
+        form.erpnext_company.innerHTML += `<option value="${esc(c.erpnext_company)}">${esc(c.erpnext_company)}</option>`;
+      form.erpnext_company.value = c.erpnext_company;
+      form.vat_registered.checked = c.vat_registered;
+      form.scrollIntoView({ behavior: "smooth" });
+    }
+    $("#cancel").addEventListener("click", () => location.reload());
+
+    onSubmit(form, async (d) => {
+      const body = { ...d, vat_registered: form.vat_registered.checked, year_end_month: Number(d.year_end_month) };
+      delete body.id;
+      if (d.id) await api.updateCompany(d.id, body);
+      else {
+        const c = await api.createCompany(body);
+        if (!company.id) company.set(c.id);
+      }
+      location.href = "/companies.html";
+    });
+    load().catch(e => flash(e.message, "err"));
+  </script>
+</body>
+</html>
