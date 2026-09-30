@@ -315,3 +315,15 @@ def test_parsers():
 
     rows = parse_csv(SALES_CSV)
     assert rows[1]["debits"] == 500 and rows[0]["credits"] == 12000
+
+
+def test_cors_allows_pages_previews(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setenv("FRONTEND_URL", "https://colunimbus.pages.dev")
+    rx = Settings().cors_origin_regex
+    import re as _re
+    assert _re.fullmatch(rx, "https://colunimbus.pages.dev")
+    assert _re.fullmatch(rx, "https://7f3a9ccb.colunimbus.pages.dev")
+    assert not _re.fullmatch(rx, "https://evil.pages.dev")
+    assert not _re.fullmatch(rx, "https://colunimbus.pages.dev.evil.com")

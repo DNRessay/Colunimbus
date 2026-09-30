@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 try:
@@ -30,6 +31,10 @@ class Settings:
 
         self.frontend_url = _env("FRONTEND_URL", "http://localhost:8788").rstrip("/")
         self.cors_origins = _list("CORS_ALLOWED_ORIGINS") or [self.frontend_url]
+        # Cloudflare Pages also serves every deploy on <hash>.<project>.pages.dev; allow those previews.
+        host = self.frontend_url.split("://", 1)[-1]
+        default_regex = rf"https://([a-z0-9-]+\.)?{re.escape(host)}" if host.endswith(".pages.dev") else ""
+        self.cors_origin_regex = _env("CORS_ORIGIN_REGEX", default_regex) or None
         # Public base URL of this API (Lambda Function URL). Used to build OAuth redirect URIs.
         self.api_url = _env("API_URL").rstrip("/")
 
