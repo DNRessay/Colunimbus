@@ -14,6 +14,7 @@ env:
   AWS_REGION: eu-west-1
   STACK: colunimbus-api
   PAGES_PROJECT: colunimbus
+  CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'sale-boss.co.za' }}
 
 jobs:
   test:
@@ -87,8 +88,9 @@ jobs:
               -d "{\"name\":\"$PAGES_PROJECT\",\"production_branch\":\"main\"}" -o project.json
           fi
           SUB=$(python -c "import json; print(json.load(open('project.json'))['result']['subdomain'])")
-          echo "FRONTEND_URL=https://$SUB" >> "$GITHUB_ENV"
-          echo "Frontend: https://$SUB"
+          echo "PAGES_URL=https://$SUB" >> "$GITHUB_ENV"
+          echo "FRONTEND_URL=https://${CUSTOM_DOMAIN:-$SUB}" >> "$GITHUB_ENV"
+          echo "Frontend: https://${CUSTOM_DOMAIN:-$SUB}"
 
       - name: Build backend
         working-directory: backend
@@ -98,7 +100,9 @@ jobs:
         working-directory: backend
         run: |
           sam package --resolve-s3 --region "$AWS_REGION" --output-template-file packaged.yaml
-          params=("SecretKey=$SECRET_KEY" "DatabaseUrl=$DATABASE_URL" "FrontendUrl=$FRONTEND_URL")
+          origins="$PAGES_URL"
+          [ -n "$CUSTOM_DOMAIN" ] && origins="$origins,https://www.$CUSTOM_DOMAIN"
+          params=("SecretKey=$SECRET_KEY" "DatabaseUrl=$DATABASE_URL" "FrontendUrl=$FRONTEND_URL" "CorsAllowedOrigins=$origins")
           [ -n "$GOOGLE_CLIENT_ID" ] && params+=("GoogleClientId=$GOOGLE_CLIENT_ID")
           [ -n "$GOOGLE_CLIENT_SECRET" ] && params+=("GoogleClientSecret=$GOOGLE_CLIENT_SECRET")
           [ -n "$GROQ_API_KEYS" ] && params+=("GroqApiKeys=$GROQ_API_KEYS")
