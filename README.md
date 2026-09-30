@@ -59,6 +59,14 @@ Sign up at `/register.html`, then add your companies. Without `WORKER_FUNCTION_N
 
 ## Deploy
 
+**Automatic (GitHub Actions):** every push to `main` that touches `backend/` or `frontend/` runs `.github/workflows/deploy.yml`. It runs the tests, deploys the SAM stack `colunimbus-api` to eu-west-1, deploys the Pages project `colunimbus`, and smoke-tests the API. You can also run it by hand from the Actions tab.
+- **Required repo secrets:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `LSUITE_DATABASE_URL`.
+- **Optional repo secrets:** `LSUITE_GOOGLE_CLIENT_ID`, `LSUITE_GOOGLE_CLIENT_SECRET`, `LSUITE_GROQ_API_KEYS`.
+- **App secret key:** created on the first run and kept in AWS SSM (`/colunimbus/secret-key`). Don't delete it.
+
+The manual steps below do the same by hand.
+
+
 **Database (Neon)**
 1. Create a project in Neon's Frankfurt or London region.
 2. Copy the **pooled** connection string (the host contains `-pooler`). It looks like `postgresql://user:pass@ep-xxx-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require`.
