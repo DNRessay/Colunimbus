@@ -85,7 +85,6 @@ export async function request(path, { method = "GET", body, raw = false } = {}, 
 const get = (p) => request(p);
 const post = (p, body = {}) => request(p, { method: "POST", body });
 const patch = (p, body) => request(p, { method: "PATCH", body });
-const put = (p, body) => request(p, { method: "PUT", body });
 const del = (p) => request(p, { method: "DELETE" });
 const qs = (params = {}) => {
   const s = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== "" && v != null)).toString();
@@ -191,23 +190,4 @@ export const api = {
   reconExport: (y, m) => request(`/api/reconciliation/month/${y}/${m}/export`, { raw: true }),
   manualMatch: (txnId, journal_entry_id) => post(`/api/reconciliation/transactions/${txnId}/match`, { journal_entry_id }),
   unmatch: (txnId) => post(`/api/reconciliation/transactions/${txnId}/unmatch`),
-
-  // personal investments (private to the signed-in user)
-  investSummary: () => get("/api/invest/summary"),
-  investQuote: (symbol) => get(`/api/invest/quote/${encodeURIComponent(symbol)}`),
-  investTxns: () => get("/api/invest/transactions"),
-  addInvestTxn: (b) => post("/api/invest/transactions", b),
-  deleteInvestTxn: (id) => del(`/api/invest/transactions/${id}`),
-  importInvestCsv: (fd) => post("/api/invest/transactions/import", fd),
-  investTemplate: () => request("/api/invest/transactions/template", { raw: true }),
-  setManualPrice: (symbol, price) => put(`/api/invest/prices/${encodeURIComponent(symbol)}`, { price }),
-  clearManualPrice: (symbol) => del(`/api/invest/prices/${encodeURIComponent(symbol)}`),
-  watchlist: () => get("/api/invest/watchlist"),
-  addWatch: (b) => post("/api/invest/watchlist", b),
-  updateWatch: (id, b) => patch(`/api/invest/watchlist/${id}`, b),
-  deleteWatch: (id) => del(`/api/invest/watchlist/${id}`),
-  properties: () => get("/api/invest/properties"),
-  addProperty: (b) => post("/api/invest/properties", b),
-  updateProperty: (id, b) => put(`/api/invest/properties/${id}`, b),
-  deleteProperty: (id) => del(`/api/invest/properties/${id}`),
 };

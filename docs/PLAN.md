@@ -82,23 +82,9 @@ This is built generically (an organisation has many companies), so Vicinic can s
 | 6 | **Job costing** for the building company: tag transactions to a project or job (ERPNext Project / Cost Center). | Carpentry and building work is quoted per job, so profit per job matters. |
 | 7 | WhatsApp statement upload (reuses the BHKA bot pattern). | Convenience. |
 
-## 5. Investing tracker (built: "My investments")
+## 5. Investing: separate app, C-Lab
 
-**For:** the accountant's personal EasyEquities investing. He likes property and some higher-risk shares. The portfolio started around R30k and is roughly 2–2.5× that now.
-
-- **Holdings:** import EasyEquities history (their statements or CSV; there's no official API) or enter it manually. Track cost basis and return vs JSE Top 40, the Satrix Property ETF and USD/ZAR.
-- **Property watchlist:** JSE REITs (Growthpoint, Redefine, Fortress…), property ETFs and EasyProperties listings, with yield and distribution dates. Physical property is tracked as valuation, bond and rent.
-- **Alerts:** price moves, dividend dates and results dates, by email or WhatsApp. Prices come from yfinance (`.JO` tickers).
-- **SA macro scorecard:** reuses the forex-news event-study and scoring loop. It makes calls on SARB rate decisions, SA CPI and USD/ZAR, then scores them after the event, so the hit rate is honest.
-
-It lives in `backend/app/invest/`, shares the login, and each user's data is private. Done: holdings, returns, the benchmark comparison, property, the watchlist and alerts. Still to do: an EasyEquities-specific import (needs a sample export) and the SA macro scorecard. It stays a personal tracker, not advice to others.
-
-**Reused from forex-news:**
-- `analysis/event_study.py`
-- `core/predictions.py`
-- `events/recurrence.py`
-- `reports/narrative.py`
-- the SerpAPI fetcher
+Charlie's personal investing (EasyEquities holdings, property, JSE watchlist, forex/macro scorecard) lives in its own app, **C-Lab**. It is kept out of C.T.H.A.I so the business tool only ever holds the group's business data.
 
 ## 6. Open questions
 
