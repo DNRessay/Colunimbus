@@ -74,6 +74,7 @@ def handle(event: dict, local_files=None):
             _run_tracked(db, event)
         elif kind == "categorize_all":
             _categorize_all(db)
+            _invest_alerts(db)
         else:
             log.error("Unknown job event: %s", event)
     finally:
@@ -129,3 +130,13 @@ def _categorize_all(db):
         except Exception:
             db.rollback()
             log.exception("Scheduled categorize failed for client %s", client.id)
+
+
+def _invest_alerts(db):
+    from .invest.alerts import check_all
+
+    try:
+        log.info("Investment price alerts sent: %s", check_all(db))
+    except Exception:
+        db.rollback()
+        log.exception("Investment alerts failed")
