@@ -2,6 +2,8 @@
 
 Financial automation for South African bank statements. It imports statements (Gmail, PDF, CSV), parses Capitec, TymeBank and GoTyme statements, categorizes transactions (keywords first, then Groq AI), posts them to ERPNext as journal entries, reconciles them against ERPNext month by month, and syncs ERPNext invoices.
 
+See [docs/PLAN.md](docs/PLAN.md) for the product plan and roadmap.
+
 ```
 backend/    FastAPI + SQLAlchemy on AWS Lambda (SAM template)
 frontend/   Plain HTML/CSS/JS on Cloudflare Pages (no build step)
