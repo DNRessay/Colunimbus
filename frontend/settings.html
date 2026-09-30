@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Settings — Colunimbus</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <h1>Settings</h1>
+    <div id="msg"></div>
+
+    <div class="card">
+      <h3>Organisation</h3>
+      <form id="org" class="row"><input name="name" class="grow" required /><button type="submit">Save</button></form>
+    </div>
+
+    <div class="card">
+      <h3>ERPNext connection</h3>
+      <p class="muted">One ERPNext site for the whole group. Each company in the app links to a Company inside it.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>URL</th><th>Last sync</th><th></th></tr></thead>
+        <tbody id="configs"></tbody>
+      </table></div>
+      <details style="margin-top:1rem">
+        <summary>Add / replace connection</summary>
+        <form id="add-config" style="margin-top:1rem">
+          <div class="fields">
+            <div class="field"><label>Name</label><input name="name" required value="ERPNext" /></div>
+            <div class="field"><label>URL</label><input name="base_url" type="url" required placeholder="https://your-site.erpnext.com" /></div>
+            <div class="field"><label>API key</label><input name="api_key" required autocomplete="off" /></div>
+            <div class="field"><label>API secret</label><input name="api_secret" type="password" required autocomplete="off" /></div>
+          </div>
+          <button type="submit">Save &amp; activate</button>
+        </form>
+      </details>
+    </div>
+
+    <div class="card">
+      <h3>Team</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Role</th><th></th></tr></thead>
+        <tbody id="team"></tbody>
+      </table></div>
+      <details id="add-member-box" style="margin-top:1rem">
+        <summary>Add a team member</summary>
+        <form id="add-member" style="margin-top:1rem">
+          <div class="fields">
+            <div class="field"><label>First name</label><input name="first_name" required /></div>
+            <div class="field"><label>Last name</label><input name="last_name" /></div>
+            <div class="field"><label>Email</label><input name="email" type="email" required /></div>
+            <div class="field"><label>Username</label><input name="username" required /></div>
+            <div class="field"><label>Temporary password</label><input name="password" type="text" required minlength="8" autocomplete="off" /></div>
+            <div class="field"><label>Role</label><select name="role"><option value="bookkeeper">Bookkeeper</option><option value="owner">Owner</option></select></div>
+          </div>
+          <button type="submit">Add</button>
+        </form>
+      </details>
+    </div>
+
+    <div class="card">
+      <h3>My account</h3>
+      <form id="me">
+        <div class="fields">
+          <div class="field"><label>First name</label><input name="first_name" /></div>
+          <div class="field"><label>Last name</label><input name="last_name" /></div>
+          <div class="field"><label>Email</label><input name="email" type="email" /></div>
+        </div>
+        <button type="submit">Save</button>
+      </form>
+      <h3 style="margin-top:1.5rem">Change password</h3>
+      <form id="password">
+        <div class="fields">
+          <div class="field"><label>Current password</label><input name="old_password" type="password" required autocomplete="current-password" /></div>
+          <div class="field"><label>New password</label><input name="new_password1" type="password" required minlength="8" autocomplete="new-password" /></div>
+          <div class="field"><label>Confirm new password</label><input name="new_password2" type="password" required minlength="8" autocomplete="new-password" /></div>
+        </div>
+        <button type="submit">Change password</button>
+      </form>
+    </div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, $$, action, badge, day, empty, esc, flash, onSubmit, page } from "/js/ui.js";
+    await page({ needsCompany: false });
+
+    const me = await api.me();
+    const isOwner = me.role === "owner";
+    for (const k of ["first_name", "last_name", "email"]) $("#me")[k].value = me[k];
+    $("#add-member-box").hidden = !isOwner;
+    if (!isOwner) $$("#org button, #add-config button").forEach(b => b.disabled = true);
+
+    async function load() {
+      const [org, configs, team] = await Promise.all([api.practice(), api.erpnextConfigs(), api.team()]);
+      $("#org").name.value = org.name;
+      $("#configs").innerHTML = configs.map(c => `<tr><td>${esc(c.name)} ${c.is_active ? badge("active", "ok") : ""}</td><td>${esc(c.base_url)}</td><td>${day(c.last_sync) || "—"}</td>
+        <td class="row"><button class="secondary small test" data-id="${c.id}">Test</button>
+          ${isOwner && !c.is_active ? `<button class="secondary small activate" data-id="${c.id}">Activate</button>` : ""}
+          ${isOwner ? `<button class="secondary small del-config" data-id="${c.id}">Delete</button>` : ""}</td></tr>`).join("") || empty(4, "Not connected yet.");
+      $$(".test").forEach(b => action(b, async () => { const r = await api.testConfig(b.dataset.id); flash(r.message, r.success ? "ok" : "err"); }));
+      $$(".activate").forEach(b => action(b, async () => { await api.updateErpnextConfig(b.dataset.id, { is_active: true }); load(); }));
+      $$(".del-config").forEach(b => action(b, async () => { if (confirm("Delete this connection?")) { await api.deleteErpnextConfig(b.dataset.id); load(); } }));
+
+      $("#team").innerHTML = team.map(u => `<tr><td>${esc(u.first_name)} ${esc(u.last_name)}</td><td>${esc(u.username)}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td>
+        <td>${isOwner && u.id !== me.id ? `<button class="secondary small remove" data-id="${u.id}">Remove</button>` : ""}</td></tr>`).join("");
+      $$(".remove").forEach(b => action(b, async () => { if (confirm("Remove this person's access?")) { await api.removeMember(b.dataset.id); load(); } }));
+    }
+
+    onSubmit($("#org"), async (d) => { await api.updatePractice(d); flash("Saved."); });
+    onSubmit($("#add-config"), async (d, e) => {
+      const c = await api.createErpnextConfig(d);
+      e.target.reset();
+      const r = await api.testConfig(c.id);
+      flash(r.success ? `Connected. ${r.message}` : `Saved, but the test failed: ${r.message}`, r.success ? "ok" : "err");
+      load();
+    });
+    onSubmit($("#add-member"), async (d, e) => { await api.addMember(d); e.target.reset(); flash("Added. Share their username and temporary password with them."); load(); });
+    onSubmit($("#me"), async (d) => { await api.updateMe(d); flash("Saved."); });
+    onSubmit($("#password"), async (d, e) => { flash((await api.changePassword(d)).message); e.target.reset(); });
+    load().catch(e => flash(e.message, "err"));
+  </script>
+</body>
+</html>

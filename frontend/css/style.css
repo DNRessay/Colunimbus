@@ -153,6 +153,8 @@ button:disabled { opacity: 0.55; cursor: progress; }
   padding: 0.45rem 0.65rem;
 }
 .btn:hover { border-color: var(--accent); }
+.btn.inline { display: inline-block; }
+nav #company { max-width: 14rem; }
 .tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
 .tabs button.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 details summary { cursor: pointer; font-weight: 600; }

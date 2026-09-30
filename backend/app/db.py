@@ -30,6 +30,10 @@ def build_engine(url: str):
             ssl = {"ca": settings.mysql_ssl_ca} if settings.mysql_ssl_ca else {"check_hostname": False}
             connect_args["ssl"] = ssl
 
+    if u.drivername.startswith("postgresql"):
+        # Neon's free tier sleeps when idle; give the first connection time to wake it.
+        connect_args["connect_timeout"] = 15
+
     return create_engine(u, connect_args=connect_args, pool_pre_ping=True, pool_recycle=280)
 
 

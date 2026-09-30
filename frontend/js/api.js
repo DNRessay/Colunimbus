@@ -1,7 +1,8 @@
 import { API_BASE } from "./config.js";
 
-const ACCESS = "lsuite_access";
-const REFRESH = "lsuite_refresh";
+const ACCESS = "colunimbus_access";
+const REFRESH = "colunimbus_refresh";
+const COMPANY = "colunimbus_company";
 
 const store = {
   get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -14,6 +15,12 @@ export const tokens = {
   set(access, refresh) { if (access) store.set(ACCESS, access); if (refresh) store.set(REFRESH, refresh); },
   clear() { store.set(ACCESS, null); store.set(REFRESH, null); },
   isLoggedIn() { return !!store.get(ACCESS); },
+};
+
+// The company (client) every company-scoped call is about; sent as X-Client-Id.
+export const company = {
+  get id() { return store.get(COMPANY); },
+  set(id) { store.set(COMPANY, id ? String(id) : null); },
 };
 
 // Social login lands with #access=...&refresh=... in the URL fragment.
@@ -35,7 +42,7 @@ function errorText(data, fallback) {
 
 async function refreshAccess() {
   if (!tokens.refresh) return false;
-  const res = await fetch(`${API_BASE}/api/token/refresh`, {
+  const res = await fetch(`${API_BASE}/api/auth/token/refresh`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh: tokens.refresh }),
   }).catch(() => null);
@@ -48,6 +55,7 @@ export async function request(path, { method = "GET", body, raw = false } = {}, 
   const headers = {};
   if (body !== undefined && !(body instanceof FormData)) headers["Content-Type"] = "application/json";
   if (tokens.access) headers.Authorization = `Bearer ${tokens.access}`;
+  if (company.id) headers["X-Client-Id"] = company.id;
   let res;
   try {
     res = await fetch(`${API_BASE}${path}`, {
@@ -55,6 +63,9 @@ export async function request(path, { method = "GET", body, raw = false } = {}, 
     });
   } catch {
     throw new Error("Can't reach the server. Check your connection.");
+  }
+  if (res.status === 404 && company.id && (await res.clone().json().catch(() => ({}))).detail === "Client not found.") {
+    company.set(null);  // stale selection, e.g. company deleted
   }
   if (res.status === 401 && !retried && tokens.refresh) {
     if (await refreshAccess()) return request(path, { method, body, raw }, true);
@@ -81,25 +92,33 @@ const qs = (params = {}) => {
 };
 
 export const api = {
-  // auth
-  register: (b) => post("/api/authusers/register", b),
-  login: (username, password) => post("/api/authusers/login", { username, password }),
-  logout: () => post("/api/authusers/logout"),
-  me: () => get("/api/authusers/me"),
-  profile: () => get("/api/authusers/profile"),
-  updateProfile: (b) => patch("/api/authusers/profile", b),
-  changePassword: (b) => post("/api/authusers/change-password", b),
-  requestReset: (email) => post("/api/authusers/password-reset", { email }),
-  confirmReset: (b) => post("/api/authusers/password-reset/confirm", b),
-  links: () => get("/api/authusers/links"),
-  addLink: (b) => post("/api/authusers/links", b),
-  deleteLink: (id) => del(`/api/authusers/links/${id}`),
+  // auth + organisation
+  register: (b) => post("/api/auth/register", b),
+  login: (username, password) => post("/api/auth/login", { username, password }),
+  logout: () => post("/api/auth/logout"),
+  me: () => get("/api/auth/me"),
+  updateMe: (b) => patch("/api/auth/me", b),
+  changePassword: (b) => post("/api/auth/change-password", b),
+  requestReset: (email) => post("/api/auth/password-reset", { email }),
+  confirmReset: (b) => post("/api/auth/password-reset/confirm", b),
   socialProviders: () => get("/auth/social/providers"),
-  socialLoginUrl: (p) => `${API_BASE}/auth/social/${p}/login`,
+  googleLoginUrl: () => `${API_BASE}/auth/social/google/login`,
+  practice: () => get("/api/practice"),
+  updatePractice: (b) => patch("/api/practice", b),
+  team: () => get("/api/practice/users"),
+  addMember: (b) => post("/api/practice/users", b),
+  removeMember: (id) => del(`/api/practice/users/${id}`),
 
+  // companies
+  companies: () => get("/api/clients"),
+  createCompany: (b) => post("/api/clients", b),
+  updateCompany: (id, b) => patch(`/api/clients/${id}`, b),
+  deleteCompany: (id) => del(`/api/clients/${id}`),
   dashboard: () => get("/api/dashboard"),
+  intercompany: () => get("/api/intercompany"),
+  confirmIntercompany: (out_id, in_id) => post("/api/intercompany/confirm", { out_id, in_id }),
 
-  // resources
+  // bank data (selected company)
   accounts: () => get("/api/accounts"),
   createAccount: (b) => post("/api/accounts", b),
   updateAccount: (id, b) => patch(`/api/accounts/${id}`, b),
@@ -109,18 +128,13 @@ export const api = {
   updateCategory: (id, b) => patch(`/api/categories/${id}`, b),
   deleteCategory: (id) => del(`/api/categories/${id}`),
   statements: () => get("/api/statements"),
+  inbox: () => get("/api/statements?unassigned=1"),
+  assignStatement: (id, b) => patch(`/api/statements/${id}`, b),
   deleteStatement: (id) => del(`/api/statements/${id}`),
-  invoices: () => get("/api/invoices"),
-  createInvoice: (b) => post("/api/invoices", b),
-  updateInvoice: (id, b) => patch(`/api/invoices/${id}`, b),
-  deleteInvoice: (id) => del(`/api/invoices/${id}`),
   transactions: (params) => get(`/api/transactions${qs(params)}`),
+  createTransaction: (b) => post("/api/transactions", b),
   updateTransaction: (id, b) => patch(`/api/transactions/${id}`, b),
-  erpnextConfigs: () => get("/api/erpnext-configs"),
-  createErpnextConfig: (b) => post("/api/erpnext-configs", b),
-  updateErpnextConfig: (id, b) => patch(`/api/erpnext-configs/${id}`, b),
-  deleteErpnextConfig: (id) => del(`/api/erpnext-configs/${id}`),
-  syncLogs: () => get("/api/erpnext-sync-logs?limit=50"),
+  deleteTransaction: (id) => del(`/api/transactions/${id}`),
   pdfJobs: () => get("/api/pdf-jobs"),
   job: (id) => get(`/api/jobs/${id}`),
 
@@ -131,36 +145,35 @@ export const api = {
   autoCategorize: () => post("/api/bridge/bulk-operations/auto-categorize"),
   autoCategorizeAI: () => post("/api/bridge/bulk-operations/auto-categorize-ai"),
   previewCategorization: () => post("/api/bridge/bulk-operations/preview-categorization"),
-  bulkSync: () => post("/api/bridge/bulk-operations/sync-to-erpnext"),
   classify: (transaction) => post("/api/bridge/classify", { transaction }),
   categorize: (id, category_id) => post(`/api/bridge/transactions/${id}/categorize`, { category_id }),
   uncategorize: (id) => post(`/api/bridge/transactions/${id}/uncategorize`),
 
   // erpnext
+  erpnextConfigs: () => get("/api/erpnext-configs"),
+  createErpnextConfig: (b) => post("/api/erpnext-configs", b),
+  updateErpnextConfig: (id, b) => patch(`/api/erpnext-configs/${id}`, b),
+  deleteErpnextConfig: (id) => del(`/api/erpnext-configs/${id}`),
   testConfig: (id) => post(`/api/erpnext/configs/${id}/test`),
-  activateConfig: (id) => post(`/api/erpnext/configs/${id}/activate`),
+  erpCompanies: () => get("/api/erpnext/companies"),
+  erpAccounts: () => get("/api/erpnext/accounts"),
+  erpCostCenters: () => get("/api/erpnext/cost-centers"),
   syncTransaction: (id) => post(`/api/erpnext/transactions/${id}/sync`),
-  erpAccounts: () => get("/api/erpnext/fetch-accounts"),
-  erpCostCenters: () => get("/api/erpnext/fetch-cost-centers"),
-  erpCompanies: () => get("/api/erpnext/fetch-companies"),
-  updateErpDefaults: (b) => post("/api/erpnext/update-config-defaults", b),
   preflight: () => get("/api/erpnext/sync-preflight"),
   submitPreflight: (b) => post("/api/erpnext/sync-preflight", b),
-  syncNow: () => post("/api/erpnext/sync-now"),
   syncJobStatus: () => get("/api/erpnext/sync-job-status"),
+  syncLogs: () => get("/api/erpnext-sync-logs?limit=50"),
 
-  // gmail + uploads
-  gmailStatus: () => get("/api/gmail/status"),
-  gmailConnect: () => get("/api/gmail/connect"),
-  gmailDisconnect: () => post("/api/gmail/disconnect"),
-  importStatements: () => post("/api/gmail/statements/import"),
-  parseStatement: (id, b) => post(`/api/gmail/statements/${id}/parse`, b),
-  parseCsvStatement: (id) => post(`/api/gmail/statements/${id}/parse-csv`),
-  uploadCsv: (fd) => post("/api/gmail/upload-csv", fd),
-  bulkCsv: (fd) => post("/api/gmail/bulk-csv-import", fd),
-  uploadPdf: (fd) => post("/api/gmail/upload-pdf", fd),
-  pdfStatus: (id) => get(`/api/gmail/pdf-jobs/${id}/status`),
-  csvTemplate: () => request("/api/gmail/download-csv-template", { raw: true }),
+  // imports
+  gmailStatus: () => get("/api/imports/gmail/status"),
+  gmailConnect: () => get("/api/imports/gmail/connect"),
+  gmailDisconnect: () => post("/api/imports/gmail/disconnect"),
+  gmailFetch: () => post("/api/imports/gmail/fetch"),
+  parseStatement: (id, b) => post(`/api/imports/statements/${id}/parse`, b),
+  uploadCsv: (fd) => post("/api/imports/csv", fd),
+  uploadPdf: (fd) => post("/api/imports/pdf", fd),
+  pdfStatus: (id) => get(`/api/imports/pdf/${id}`),
+  csvTemplate: () => request("/api/imports/csv-template", { raw: true }),
 
   // erpnext invoices
   erpInvoices: (params) => get(`/api/erp-invoices${qs(params)}`),
@@ -169,7 +182,6 @@ export const api = {
 
   // reconciliation
   reconMonths: () => get("/api/reconciliation/months"),
-  reconPeriods: () => get("/api/reconciliation/periods"),
   reconMonth: (y, m, status = "") => get(`/api/reconciliation/month/${y}/${m}${qs({ status })}`),
   reconFetch: (y, m) => post(`/api/reconciliation/month/${y}/${m}/fetch`),
   reconMatch: (y, m) => post(`/api/reconciliation/month/${y}/${m}/match`),

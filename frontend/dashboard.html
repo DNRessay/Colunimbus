@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Dashboard — L-Suite</title>
+  <title>Dashboard — Colunimbus</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
@@ -12,30 +12,57 @@
   <main>
     <h1>Dashboard</h1>
     <div id="msg"></div>
-    <div id="stats" class="grid"></div>
-    <h2>Recent statements</h2>
-    <div class="card table-wrap"><table>
-      <thead><tr><th>Statement</th><th>Bank</th><th>Received</th><th>State</th></tr></thead>
-      <tbody id="statements"></tbody>
-    </table></div>
-    <h2>Recent transactions</h2>
-    <div class="card table-wrap"><table>
-      <thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="num">Amount</th><th>ERPNext</th></tr></thead>
-      <tbody id="transactions"></tbody>
-    </table></div>
+    <div id="inbox"></div>
+    <div class="card table-wrap">
+      <table>
+        <thead><tr><th>Company</th><th class="num">Transactions</th><th class="num">This month</th><th class="num">Uncategorized</th><th class="num">Not in ERPNext</th><th>Latest</th><th id="closed-head">Last month</th></tr></thead>
+        <tbody id="companies"></tbody>
+      </table>
+    </div>
+    <h2>Transfers between your companies</h2>
+    <p class="muted">Money that left one company's bank and arrived in another's. Confirm to book both sides as an intercompany transfer instead of income/expense.</p>
+    <div class="card table-wrap">
+      <table>
+        <thead><tr><th class="num">Amount</th><th>Out of</th><th>Into</th><th></th></tr></thead>
+        <tbody id="pairs"></tbody>
+      </table>
+    </div>
   </main>
   <script type="module">
-    import { api } from "/js/api.js";
-    import { $, amountCell, day, empty, esc, flash, page, syncBadge } from "/js/ui.js";
-    page();
-    const stat = (label, value) => `<div class="card stat"><div class="value">${value}</div><div class="label">${label}</div></div>`;
-    try {
+    import { api, company } from "/js/api.js";
+    import { $, $$, badge, empty, esc, flash, money, page } from "/js/ui.js";
+    await page({ needsCompany: false });
+
+    const open = (id, href) => `<a href="${href}" data-company="${id}" class="go">`;
+    async function load() {
       const d = await api.dashboard();
-      $("#stats").innerHTML = stat("Statements", d.stats.statements) + stat("Transactions", d.stats.transactions) +
-        stat("Categorized", d.stats.categorized) + stat("Synced to ERPNext", d.stats.synced);
-      $("#statements").innerHTML = d.recent_statements.map(s => `<tr><td>${esc(s.subject || s.gmail_id)}</td><td>${esc(s.bank_name)}</td><td>${day(s.received_date)}</td><td>${esc(s.state)}</td></tr>`).join("") || empty(4, "No statements yet — import some from the Import page.");
-      $("#transactions").innerHTML = d.recent_transactions.map(t => `<tr><td>${t.date}</td><td>${esc(t.description)}</td><td>${esc(t.category_name || "—")}</td>${amountCell(t)}<td>${syncBadge(t)}</td></tr>`).join("") || empty(5, "No transactions yet.");
-    } catch (e) { flash(e.message, "err"); }
+      $("#closed-head").textContent = d.last_month;
+      $("#inbox").innerHTML = d.unassigned_statements
+        ? `<div class="msg warn">${d.unassigned_statements} statement(s) from Gmail need a company. <a href="/statements.html">Assign them</a></div>` : "";
+      $("#companies").innerHTML = d.companies.map(r => `<tr>
+        <td>${open(r.client.id, "/transactions.html")}${esc(r.client.name)}</a>${r.client.erpnext_company ? "" : ` ${badge("no ERPNext company", "warn")}`}</td>
+        <td class="num">${r.transactions}</td><td class="num">${r.this_month}</td>
+        <td class="num">${r.uncategorized ? `${open(r.client.id, "/transactions.html?filter=uncategorized")}${r.uncategorized}</a>` : 0}</td>
+        <td class="num">${r.not_synced ? `${open(r.client.id, "/erpnext.html")}${r.not_synced}</a>` : 0}</td>
+        <td>${r.latest_transaction || "—"}</td>
+        <td>${r.last_month_closed ? badge("closed", "ok") : `${open(r.client.id, "/reconciliation.html")}${badge("open", "warn")}</a>`}</td>
+      </tr>`).join("") || empty(7, "No companies yet — add them on the Companies page.");
+      $$(".go").forEach(a => a.addEventListener("click", () => company.set(a.dataset.company)));
+
+      const { pairs } = await api.intercompany();
+      $("#pairs").innerHTML = pairs.map((p, i) => `<tr>
+        <td class="num">${money(p.amount)}</td>
+        <td><strong>${esc(p.out.company)}</strong> · ${p.out.date}<br><small class="muted">${esc(p.out.description)}${p.out.category ? ` (${esc(p.out.category)})` : ""}</small></td>
+        <td><strong>${esc(p.in.company)}</strong> · ${p.in.date}<br><small class="muted">${esc(p.in.description)}${p.in.category ? ` (${esc(p.in.category)})` : ""}</small></td>
+        <td><button class="small confirm" data-i="${i}">Confirm</button></td></tr>`).join("") || empty(4, "Nothing to match right now.");
+      $$(".confirm").forEach(b => b.addEventListener("click", async () => {
+        const p = pairs[b.dataset.i];
+        b.disabled = true;
+        try { flash((await api.confirmIntercompany(p.out.id, p.in.id)).message); load(); }
+        catch (e) { flash(e.message, "err"); b.disabled = false; }
+      }));
+    }
+    load().catch(e => flash(e.message, "err"));
   </script>
 </body>
 </html>

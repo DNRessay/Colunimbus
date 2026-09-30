@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Log in — L-Suite</title>
+  <title>Log in — Colunimbus</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
@@ -26,7 +26,7 @@
     import { $, flash, guestPage, onSubmit, param } from "/js/ui.js";
     guestPage();
 
-    const errors = { invalid_state: "Login link expired, try again.", oauth_failed: "Social login failed.", no_email: "Your provider didn't share an email address.", inactive: "Account disabled." };
+    const errors = { invalid_state: "Login link expired, try again.", oauth_failed: "Google sign-in failed.", no_account: "No account uses that Google email. Ask your organisation owner to add you." };
     if (param("error")) flash(errors[param("error")] || "Login failed.", "err");
 
     onSubmit($("#form"), async (d) => {
@@ -37,9 +37,8 @@
       } catch (e) { flash(e.message, "err"); }
     });
 
-    const names = { google: "Google", github: "GitHub", facebook: "Facebook" };
     api.socialProviders().then(({ providers }) => {
-      $("#social").innerHTML = providers.map(p => `<a class="btn" href="${api.socialLoginUrl(p)}">Continue with ${names[p]}</a>`).join("");
+      if (providers.includes("google")) $("#social").innerHTML = `<a class="btn" href="${api.googleLoginUrl()}">Continue with Google</a>`;
     }).catch(() => {});
   </script>
 </body>

@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from .config import settings
 from .db import SessionLocal
-from .models import ERPNextConfig, Job, User
+from .models import Client, Job
 from .services import categorize, erpnext
 from .services.imports import run_pdf_job
 
@@ -52,8 +52,9 @@ def start_pdf_import(job_id: int, files):
         dispatch({"kind": "pdf_import", "job_id": job_id}, local_files=files)
 
 
-def start_job(db, user_id: int, kind: str, **payload) -> Job:
-    job = Job(user_id=user_id, kind=kind, status="queued", message="Queued.")
+def start_job(db, user, client, kind: str, **payload) -> Job:
+    job = Job(practice_id=user.practice_id, client_id=client.id, user_id=user.id, kind=kind, status="queued",
+              message="Queued.")
     db.add(job)
     db.commit()
     dispatch({"kind": kind, "job_id": job.id, **payload})
@@ -96,14 +97,15 @@ def _run_tracked(db, event):
     job.status, job.message = "in_progress", "Running…"
     db.commit()
     try:
+        client = db.get(Client, job.client_id)
         if job.kind == "ai_categorize":
-            r = categorize.ai_categorize(db, job.user_id)
+            r = categorize.ai_categorize(db, client)
             job.message = f"{r['keyword'] + r['ai']} of {r['total']} categorized ({r['keyword']} keyword, {r['ai']} AI)."
         else:
-            config = db.get(ERPNextConfig, event["config_id"])
-            if not config or config.user_id != job.user_id:
-                raise ValueError("ERPNext config not found.")
-            r = erpnext.full_sync(db, config)
+            config = erpnext.active_config(db, client.practice_id)
+            if not config:
+                raise ValueError("No active ERPNext connection.")
+            r = erpnext.sync_client(db, config, client)
             job.message = f"Synced {r['synced']}, failed {r['failed']}, skipped {r['skipped']} of {r['total']}."
         job.result = r
         job.conclusion = "failure" if r.get("failed") else "success"
@@ -118,12 +120,12 @@ def _run_tracked(db, event):
 
 def _categorize_all(db):
     """Nightly schedule: AI categorization if Groq is configured, otherwise keyword-only."""
-    for user_id in db.scalars(select(User.id).where(User.is_active.is_(True))):
+    for client in db.scalars(select(Client).where(Client.is_active.is_(True))).all():
         try:
             if settings.groq_api_keys:
-                categorize.ai_categorize(db, user_id)
+                categorize.ai_categorize(db, client)
             else:
-                categorize.auto_categorize(db, user_id)
+                categorize.auto_categorize(db, client)
         except Exception:
             db.rollback()
-            log.exception("Scheduled categorize failed for user %s", user_id)
+            log.exception("Scheduled categorize failed for client %s", client.id)

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Category — L-Suite</title>
+  <title>Category — Colunimbus</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
@@ -16,8 +16,8 @@
     <form id="edit" class="card">
       <div class="fields">
         <div class="field"><label>Name</label><input name="name" required /></div>
-        <div class="field"><label>Type</label><select name="transaction_type"><option value="debit">debit</option><option value="credit">credit</option></select></div>
-        <div class="field"><label>ERPNext account</label><input name="erpnext_account" /></div>
+        <div class="field"><label>Type</label><select name="transaction_type"><option value="debit">debit</option><option value="credit">credit</option><option value="any">any</option></select></div>
+        <div class="field"><label>ERPNext account (this company)</label><input name="erpnext_account" /></div>
       </div>
       <div class="field"><label>Keywords</label><textarea name="keywords" rows="2"></textarea></div>
       <div class="field"><label>Learned tags</label><textarea name="tags" rows="2"></textarea></div>
@@ -32,14 +32,14 @@
   <script type="module">
     import { api } from "/js/api.js";
     import { $, $$, amountCell, empty, esc, flash, onSubmit, page, param, syncBadge } from "/js/ui.js";
-    page();
+    await page();
     const id = param("id");
     const form = $("#edit");
 
     async function load() {
       const d = await api.categoryTransactions(id);
       const c = d.category;
-      $("#title").textContent = c.name + (d.is_junk ? " (junk)" : "");
+      $("#title").textContent = c.name;
       for (const k of ["name", "transaction_type", "erpnext_account", "keywords", "tags"]) form.elements[k].value = c[k] ?? "";
       form.elements.active.checked = c.active;
       $("#rows").innerHTML = d.transactions.map(t => `<tr><td>${t.date}</td><td>${esc(t.description)}</td>${amountCell(t)}<td>${syncBadge(t)}</td>

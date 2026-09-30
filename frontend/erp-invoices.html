@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ERPNext invoices — L-Suite</title>
+  <title>ERPNext invoices — Colunimbus</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
@@ -29,7 +29,7 @@
   <script type="module">
     import { api } from "/js/api.js";
     import { $, $$, action, badge, empty, esc, flash, money, page } from "/js/ui.js";
-    page();
+    await page();
 
     let type = "";
     const now = new Date();

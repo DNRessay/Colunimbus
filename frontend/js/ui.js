@@ -1,4 +1,4 @@
-import { api, tokens } from "./api.js";
+import { api, company, tokens } from "./api.js";
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -73,41 +73,56 @@ export async function poll(fn, done, onTick, ms = 2000, maxTries = 450) {
 export const empty = (cols, text) => `<tr><td colspan="${cols}" class="muted">${esc(text)}</td></tr>`;
 
 const LINKS = [
-  ["/dashboard.html", "Dashboard"],
-  ["/transactions.html", "Transactions"],
-  ["/categories.html", "Categories"],
-  ["/accounts.html", "Accounts"],
-  ["/statements.html", "Statements"],
-  ["/gmail.html", "Import"],
-  ["/invoices.html", "Invoices"],
-  ["/erp-invoices.html", "ERP Invoices"],
-  ["/reconciliation.html", "Reconciliation"],
-  ["/erpnext.html", "ERPNext"],
-  ["/profile.html", "Profile"],
+  ["/dashboard.html", "Dashboard", false],
+  ["/transactions.html", "Transactions", true],
+  ["/categories.html", "Categories", true],
+  ["/imports.html", "Import", true],
+  ["/statements.html", "Statements", true],
+  ["/reconciliation.html", "Reconciliation", true],
+  ["/erpnext.html", "ERPNext sync", true],
+  ["/erp-invoices.html", "Invoices", true],
+  ["/accounts.html", "Bank accounts", true],
+  ["/companies.html", "Companies", false],
+  ["/settings.html", "Settings", false],
 ];
 
-export function page() {
+// Call first on every signed-in page. needsCompany: the page works on one selected company.
+export async function page({ needsCompany = true } = {}) {
   if (!tokens.isLoggedIn()) {
     location.href = "/login.html";
     throw new Error("redirecting");
   }
+  let companies = [];
+  try { companies = await api.companies(); } catch (e) { flash(e.message, "err"); }
+  const active = companies.filter(c => c.is_active);
+  if (!active.some(c => String(c.id) === company.id)) company.set(active[0]?.id);
+  if (needsCompany && !company.id) {
+    location.href = "/companies.html?first=1";
+    throw new Error("redirecting");
+  }
+
   const nav = $("#nav");
   if (nav) {
     const here = location.pathname;
     nav.innerHTML = `
-      <a class="brand" href="/dashboard.html">L-Suite</a>
+      <a class="brand" href="/dashboard.html">Colunimbus</a>
+      ${active.length ? `<select id="company" aria-label="Company">${active.map(c =>
+        `<option value="${c.id}" ${String(c.id) === company.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>` : ""}
       <button class="menu secondary" aria-label="Menu">☰</button>
       <div class="links">
         ${LINKS.map(([href, label]) => `<a href="${href}" class="${here === href ? "active" : ""}">${label}</a>`).join("")}
         <button id="logout" class="secondary small">Log out</button>
       </div>`;
     $(".menu", nav).addEventListener("click", () => nav.classList.toggle("open"));
+    $("#company", nav)?.addEventListener("change", (e) => { company.set(e.target.value); location.reload(); });
     $("#logout").addEventListener("click", async () => {
       try { await api.logout(); } catch {}
       tokens.clear();
+      company.set(null);
       location.href = "/login.html";
     });
   }
+  return { companies, current: active.find(c => String(c.id) === company.id) || null };
 }
 
 export function guestPage() {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bank accounts — L-Suite</title>
+  <title>Bank accounts — Colunimbus</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
@@ -11,7 +11,7 @@
   <nav id="nav"></nav>
   <main>
     <h1>Bank accounts</h1>
-    <p class="muted">Map each bank account to its ERPNext account (e.g. <code>Capitec Savings - ABC</code>) so synced journal entries hit the right ledger.</p>
+    <p class="muted">Bank accounts for the selected company. Map each to its ERPNext account (e.g. <code>FNB Cheque - SC</code>). The account number lets Gmail statements be matched to the right company automatically.</p>
     <div id="msg"></div>
     <div class="card table-wrap"><table>
       <thead><tr><th>Name</th><th>Bank</th><th>Number</th><th>ERPNext account</th><th>Active</th><th></th></tr></thead>
@@ -22,7 +22,7 @@
       <form id="add">
         <div class="fields">
           <div class="field"><label>Account name</label><input name="account_name" required /></div>
-          <div class="field"><label>Bank</label><select name="bank_name"><option>capitec</option><option>tymebank</option><option>gotyme</option><option>other</option></select></div>
+          <div class="field"><label>Bank</label><select name="bank_name"><option>fnb</option><option>absa</option><option>standard bank</option><option>nedbank</option><option>capitec</option><option>tymebank</option><option>gotyme</option><option>investec</option><option>other</option></select></div>
           <div class="field"><label>Account number</label><input name="account_number" /></div>
           <div class="field"><label>Type</label><input name="account_type" placeholder="savings / cheque" /></div>
           <div class="field"><label>ERPNext account</label><input name="erpnext_account" /></div>
@@ -34,7 +34,7 @@
   <script type="module">
     import { api } from "/js/api.js";
     import { $, $$, empty, esc, flash, onSubmit, page } from "/js/ui.js";
-    page();
+    await page();
 
     async function load() {
       const rows = await api.accounts();

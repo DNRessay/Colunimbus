@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Categories — L-Suite</title>
+  <title>Categories — Colunimbus</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/css/style.css" />
 </head>
@@ -18,7 +18,7 @@
         <button id="btn-auto">Auto-categorize (keywords)</button>
         <button id="btn-ai" class="secondary">AI categorize (Groq)</button>
         <button id="btn-preview" class="secondary">Preview</button>
-        <button id="btn-sync" class="secondary">Sync ready to ERPNext</button>
+        <a class="btn inline" href="/erpnext.html">ERPNext sync →</a>
       </div>
       <div id="stats" class="grid" style="margin-top:1rem"></div>
       <div id="preview"></div>
@@ -35,7 +35,7 @@
 
     <div class="card table-wrap">
       <table>
-        <thead><tr><th>Category</th><th>Type</th><th>ERPNext account</th><th class="num">Total</th><th class="num">Synced</th><th class="num">Pending</th><th></th></tr></thead>
+        <thead><tr><th>Category</th><th>Type</th><th>ERPNext account (this company)</th><th class="num">Total</th><th class="num">Synced</th><th class="num">Pending</th><th></th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
@@ -45,7 +45,7 @@
       <form id="add" style="margin-top:1rem">
         <div class="fields">
           <div class="field"><label>Name</label><input name="name" required /></div>
-          <div class="field"><label>Type</label><select name="transaction_type"><option value="debit">debit (expense)</option><option value="credit">credit (income)</option></select></div>
+          <div class="field"><label>Type</label><select name="transaction_type"><option value="debit">debit (money out)</option><option value="credit">credit (money in)</option><option value="any">any</option></select></div>
           <div class="field"><label>ERPNext account</label><input name="erpnext_account" placeholder="Groceries - ABC" /></div>
         </div>
         <div class="field"><label>Keywords (comma-separated)</label><input name="keywords" /></div>
@@ -56,18 +56,18 @@
   <script type="module">
     import { api } from "/js/api.js";
     import { $, $$, action, badge, empty, esc, flash, onSubmit, page, poll } from "/js/ui.js";
-    page();
+    await page();
 
     async function load() {
       const [{ categories }, bulk] = await Promise.all([api.categoryStats(), api.bulkStats()]);
-      $("#rows").innerHTML = categories.map(({ category: c, total, synced, pending, is_junk }) => `
+      $("#rows").innerHTML = categories.map(({ category: c, total, synced, pending }) => `
         <tr>
-          <td><a href="/category.html?id=${c.id}">${esc(c.name)}</a> ${is_junk ? badge("junk", "warn") : ""} ${c.active ? "" : badge("inactive")}</td>
+          <td><a href="/category.html?id=${c.id}">${esc(c.name)}</a> ${c.active ? "" : badge("inactive")}</td>
           <td>${esc(c.transaction_type)}</td>
           <td><input class="acct" data-id="${c.id}" value="${esc(c.erpnext_account || "")}" placeholder="Account - ABBR" /></td>
           <td class="num">${total}</td><td class="num">${synced}</td><td class="num">${pending}</td>
           <td>${total === 0 ? `<button class="secondary small del" data-id="${c.id}">Delete</button>` : ""}</td>
-        </tr>`).join("") || empty(7, "No categories yet. Run `python -m app.cli seed-categories` on the backend.");
+        </tr>`).join("") || empty(7, "No categories yet.");
 
       $$(".acct").forEach(inp => inp.addEventListener("change", async () => {
         try { await api.updateCategory(inp.dataset.id, { erpnext_account: inp.value.trim() || null }); flash("ERPNext account saved."); }
@@ -103,13 +103,9 @@
         (r.matches.length ? `<div class="table-wrap"><table><thead><tr><th>Description</th><th>Category</th><th>Keyword</th></tr></thead><tbody>` +
           r.matches.map(m => `<tr><td>${esc(m.description)}</td><td>${esc(m.category)}</td><td>${esc(m.keyword || "")}</td></tr>`).join("") + `</tbody></table></div>` : "");
     });
-    action($("#btn-sync"), async () => {
-      flash((await api.bulkSync()).message);
-      load();
-    });
     onSubmit($("#classify"), async (d) => {
       const r = await api.classify(d.transaction);
-      $("#classify-result").textContent = `${r.category} — ${r.confidence} confidence via ${r.method}${r.clue_detected ? ` (clue: ${r.clue_detected})` : ""}`;
+      $("#classify-result").textContent = `${r.category} — ${r.confidence} confidence via ${r.method}${r.keyword ? ` (keyword: ${r.keyword})` : ""}`;
     });
     onSubmit($("#add"), async (d, e) => {
       if (!d.erpnext_account) delete d.erpnext_account;

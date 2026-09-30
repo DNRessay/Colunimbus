@@ -1,245 +1,221 @@
+import base64
+import hashlib
+import io
 import os
 import time
 from datetime import date
 
-os.environ["DATABASE_URL"] = "sqlite:///./test_lsuite.db"
-os.environ["SECRET_KEY"] = "test-secret"
+os.environ["DATABASE_URL"] = "sqlite:///./test_colunimbus.db"
+os.environ["SECRET_KEY"] = "test-secret-test-secret-test-secret-xx"
 os.environ["GROQ_API_KEYS"] = ""
 
-if os.path.exists("test_lsuite.db"):
-    os.remove("test_lsuite.db")
+if os.path.exists("test_colunimbus.db"):
+    os.remove("test_colunimbus.db")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.security import hash_password, verify_password  # noqa: E402
+from app.security import hash_password, unseal, verify_password  # noqa: E402
 from app.services.parsers.capitec import CapitecParser  # noqa: E402
 from app.services.parsers.csv_parser import parse_csv  # noqa: E402
 from app.services.parsers.tymebank import TymeBankLegacyParser  # noqa: E402
 
-client = TestClient(app)
+api = TestClient(app)
 
-CSV = (
+SALES_CSV = (
     "Transaction Date,Posting Date,Description,Debits,Credits,Balance,Bank account\n"
-    "2025/09/23,2025/09/23,Salary ACME,,1000.00,5000.00,Capitec Savings\n"
-    "2025/09/24,2025/09/24,Checkers Sandton,500.00,,4500.00,Capitec Savings\n"
-    "2025/09/25,2025/09/25,Zzzq Unknown Merchant,20.00,,4480.00,Capitec Savings\n"
+    "2025/09/23,2025/09/23,Payment received Customer ACME,,12000.00,20000.00,FNB\n"
+    "2025/09/24,2025/09/24,Checkers Sandton,500.00,,19500.00,FNB\n"
+    "2025/09/25,2025/09/25,Transfer to Building Co,5000.00,,14500.00,FNB\n"
+)
+BUILD_CSV = (
+    "Transaction Date,Posting Date,Description,Debits,Credits,Balance,Bank account\n"
+    "2025/09/26,2025/09/26,Transfer from Sales Co,,5000.00,9000.00,Capitec\n"
+    "2025/09/27,2025/09/27,Zzqx Timber Yard,3200.00,,5800.00,Capitec\n"
 )
 
 
+def upload(headers, csv_text, name="s.csv", **form):
+    return api.post("/api/imports/csv", headers=headers, files=[("csv_files", (name, csv_text, "text/csv"))], data=form)
+
+
 @pytest.fixture(scope="module")
-def auth():
-    r = client.post("/api/authusers/register", json={
-        "first_name": "Le", "last_name": "Roy", "email": "LR@example.com", "username": "leroy",
-        "password": "Str0ng-pass!", "city": "Pretoria",
+def org():
+    r = api.post("/api/auth/register", json={
+        "practice_name": "Mokoena Group", "first_name": "Charlie", "last_name": "M", "email": "CM@example.com",
+        "username": "charlie", "password": "Str0ng-pass!",
     })
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["user"]["email"] == "lr@example.com"
-    return {"Authorization": f"Bearer {body['access']}"}, body["refresh"]
+    assert body["user"]["role"] == "owner"
+    auth = {"Authorization": f"Bearer {body['access']}"}
+    sales = api.post("/api/clients", headers=auth, json={"name": "Sales Co", "vat_registered": True}).json()
+    build = api.post("/api/clients", headers=auth, json={"name": "Building Co"}).json()
+    return {
+        "auth": auth, "refresh": body["refresh"],
+        "sales": {**auth, "X-Client-Id": str(sales["id"])}, "sales_id": sales["id"],
+        "build": {**auth, "X-Client-Id": str(build["id"])}, "build_id": build["id"],
+    }
 
 
 def test_django_hash_compat():
-    # hash produced by Django's PBKDF2PasswordHasher for "hunter22" with salt "abc", 1000 iterations
-    django_hash = "pbkdf2_sha256$1000$abc$" + __import__("base64").b64encode(
-        __import__("hashlib").pbkdf2_hmac("sha256", b"hunter22", b"abc", 1000)).decode()
+    django_hash = "pbkdf2_sha256$1000$abc$" + base64.b64encode(hashlib.pbkdf2_hmac("sha256", b"hunter22", b"abc", 1000)).decode()
     assert verify_password("hunter22", django_hash)
     assert not verify_password("wrong", django_hash)
     assert verify_password("x-pass-123", hash_password("x-pass-123"))
 
 
 def test_health():
-    assert client.get("/api/health").json() == {"status": "ok", "database": True}
+    assert api.get("/api/health").json() == {"status": "ok", "database": True}
 
 
-def test_auth_flow(auth):
-    headers, refresh = auth
-    assert client.get("/api/authusers/me/", headers=headers).json()["username"] == "leroy"
-    assert client.get("/api/authusers/me").status_code == 401
-    r = client.post("/api/authusers/login", json={"username": "lr@example.com", "password": "Str0ng-pass!"})
-    assert r.status_code == 200
-    assert client.post("/api/authusers/login", json={"username": "leroy", "password": "nope"}).status_code == 401
-    assert "access" in client.post("/api/token/refresh", json={"refresh": refresh}).json()
-    dup = client.post("/api/authusers/register", json={
-        "first_name": "a", "last_name": "b", "email": "lr@example.com", "username": "leroy", "password": "123"})
-    assert dup.status_code == 400 and {"email", "username", "password"} <= set(dup.json()["detail"])
+def test_auth_and_team(org):
+    assert api.get("/api/auth/me/", headers=org["auth"]).json()["username"] == "charlie"
+    assert api.get("/api/auth/me").status_code == 401
+    assert api.post("/api/auth/login", json={"username": "cm@example.com", "password": "Str0ng-pass!"}).status_code == 200
+    assert api.post("/api/auth/login", json={"username": "charlie", "password": "nope"}).status_code == 401
+    assert "access" in api.post("/api/auth/token/refresh", json={"refresh": org["refresh"]}).json()
+    assert api.get("/api/practice", headers=org["auth"]).json()["name"] == "Mokoena Group"
+
+    r = api.post("/api/practice/users", headers=org["auth"], json={
+        "first_name": "Tli", "email": "tli@example.com", "username": "tli", "password": "B00kkeep-pass"})
+    assert r.status_code == 201 and r.json()["role"] == "bookkeeper"
+    member = api.post("/api/auth/login", json={"username": "tli", "password": "B00kkeep-pass"}).json()
+    mh = {"Authorization": f"Bearer {member['access']}"}
+    assert len(api.get("/api/clients", headers=mh).json()) == 2  # shares the organisation's companies
+    assert api.post("/api/practice/users", headers=mh, json={
+        "first_name": "x", "email": "x@example.com", "username": "x", "password": "Xx-pass-word1"}).status_code == 403
+    assert len(api.get("/api/practice/users", headers=org["auth"]).json()) == 2
 
 
-def test_profile_and_links(auth):
-    headers, _ = auth
-    assert client.get("/api/authusers/profile", headers=headers).json()["city"] == "Pretoria"
-    r = client.patch("/api/authusers/profile", headers=headers, json={"occupation": "Dev", "date_of_birth": ""})
-    assert r.json()["occupation"] == "Dev"
-    link = client.post("/api/authusers/links", headers=headers, json={"platform": "GitHub", "url": "github.com/x"}).json()
-    assert link["url"] == "https://github.com/x" and link["icon"] == "🐙"
-    assert client.delete(f"/api/authusers/links/{link['id']}", headers=headers).status_code == 204
+def test_default_categories_seeded(org):
+    names = {c["name"] for c in api.get("/api/categories", headers=org["auth"]).json()}
+    assert {"Groceries", "Income", "Intercompany Transfer"} <= names
 
 
-def test_password_reset(auth, monkeypatch):
+def test_client_header_required(org):
+    assert api.get("/api/transactions", headers=org["auth"]).status_code == 400
+    assert api.get("/api/transactions", headers={**org["auth"], "X-Client-Id": "999"}).status_code == 404
+
+
+def test_password_reset(org, monkeypatch):
     sent = {}
     monkeypatch.setattr("app.routers.auth.send_mail", lambda to, s, body: sent.update(body=body))
-    client.post("/api/authusers/password-reset", json={"email": "lr@example.com"})
+    api.post("/api/auth/password-reset", json={"email": "cm@example.com"})
     token = sent["body"].split("token=")[1].split()[0]
-    r = client.post("/api/authusers/password-reset/confirm", json={"token": token, "new_password": "N3w-pass-word"})
-    assert r.status_code == 200
-    # token is single-use: password hash changed
-    r = client.post("/api/authusers/password-reset/confirm", json={"token": token, "new_password": "An0ther-pass"})
-    assert r.status_code == 400
-    r = client.post("/api/authusers/login", json={"username": "leroy", "password": "N3w-pass-word"})
-    assert r.status_code == 200
+    assert api.post("/api/auth/password-reset/confirm", json={"token": token, "new_password": "N3w-pass-word"}).status_code == 200
+    assert api.post("/api/auth/password-reset/confirm", json={"token": token, "new_password": "An0ther-pass"}).status_code == 400
+    assert api.post("/api/auth/login", json={"username": "charlie", "password": "N3w-pass-word"}).status_code == 200
 
 
-def test_csv_import_categorize_dashboard(auth):
-    headers, _ = auth
-    client.post("/api/categories", headers=headers, json={"name": "Groceries", "transaction_type": "debit",
-                                                          "keywords": "checkers"})
-    r = client.post("/api/gmail/upload-csv", headers=headers, files={"csv_file": ("s.csv", CSV, "text/csv")},
-                    data={"create_statement": "on"})
+def test_csv_import_and_categorize(org):
+    ba = api.post("/api/accounts", headers=org["sales"], json={"account_name": "FNB Cheque", "bank_name": "fnb",
+                                                               "account_number": "62001234567"}).json()
+    r = upload(org["sales"], SALES_CSV, bank_account_id=str(ba["id"]))
     assert r.status_code == 200, r.text
     assert r.json()["imported"] == 3
-    # re-upload is deduplicated
-    assert client.post("/api/gmail/upload-csv", headers=headers,
-                       files={"csv_file": ("s.csv", CSV, "text/csv")}).json()["skipped"] == 3
+    assert upload(org["sales"], SALES_CSV).json()["skipped"] == 3  # deduplicated
+    assert upload(org["build"], BUILD_CSV).json()["imported"] == 2
 
-    preview = client.post("/api/bridge/bulk-operations/preview-categorization", headers=headers).json()
-    assert preview["total_uncategorized"] == 3 and preview["will_be_categorized"] == 2
+    r = api.post("/api/bridge/bulk-operations/auto-categorize", headers=org["sales"]).json()
+    assert r == {"categorized": 3, "total": 3}  # income, groceries, "transfer to" -> Transfer Out
+    txns = {t["description"]: t for t in api.get("/api/transactions", headers=org["sales"]).json()}
+    assert txns["Checkers Sandton"]["category_name"] == "Groceries"
+    assert txns["Payment received Customer ACME"]["category_name"] == "Income"
+    assert txns["Checkers Sandton"]["bank_account"] == ba["id"]
+    assert api.get("/api/transactions?uncategorized=1", headers=org["sales"]).json() == []
 
-    r = client.post("/api/bridge/bulk-operations/auto-categorize", headers=headers).json()
-    assert r == {"categorized": 2, "total": 3}
-
-    txns = client.get("/api/transactions", headers=headers).json()
-    by_desc = {t["description"]: t for t in txns}
-    assert by_desc["Checkers Sandton"]["category_name"] == "Groceries"
-    assert by_desc["Salary ACME"]["category_name"] == "Income"
-    assert by_desc["Salary ACME"]["deposit"] == "1000.00"
-
-    uncategorized = client.get("/api/transactions?uncategorized=1", headers=headers).json()
-    assert [t["description"] for t in uncategorized] == ["Zzzq Unknown Merchant"]
-
-    cats = client.get("/api/categories", headers=headers).json()
-    groceries = next(c for c in cats if c["name"] == "Groceries")
-    tid = uncategorized[0]["id"]
-    assert client.post(f"/api/bridge/transactions/{tid}/categorize", headers=headers,
-                       json={"category_id": groceries["id"]}).status_code == 200
-    assert "zzzq" in client.get(f"/api/categories/{groceries['id']}", headers=headers).json()["tags"]
-
-    stats = client.get("/api/bridge/categories", headers=headers).json()["categories"]
-    assert next(s for s in stats if s["category"]["name"] == "Groceries")["total"] == 2
-
-    d = client.get("/api/dashboard", headers=headers).json()
-    assert d["stats"]["transactions"] == 3 and d["stats"]["categorized"] == 3 and d["stats"]["statements"] == 1
+    unknown = api.get("/api/transactions?q=Zzqx", headers=org["build"]).json()[0]
+    cats = {c["name"]: c for c in api.get("/api/categories", headers=org["auth"]).json()}
+    api.post("/api/categories", headers=org["auth"], json={"name": "Materials", "transaction_type": "debit"})
+    mat = next(c for c in api.get("/api/categories", headers=org["auth"]).json() if c["name"] == "Materials")
+    assert api.post(f"/api/bridge/transactions/{unknown['id']}/categorize", headers=org["build"],
+                    json={"category_id": mat["id"]}).status_code == 200
+    assert "zzqx" in next(c for c in api.get("/api/categories", headers=org["auth"]).json() if c["name"] == "Materials")["tags"]
+    assert cats["Groceries"]["erpnext_account"] == ""
 
 
-def test_invoices(auth):
-    headers, _ = auth
-    r = client.post("/api/invoices", headers=headers, json={
-        "invoice_number": "INV-1", "invoice_date": "2025-09-01", "customer_name": "ACME", "tax_rate": "15",
-        "items": [{"description": "Work", "quantity": "2", "unit_price": "100"}],
-    })
-    assert r.status_code == 201, r.text
-    inv = r.json()
-    assert inv["subtotal"] == "200.00" and inv["tax_amount"] == "30.00" and inv["total_amount"] == "230.00"
-    inv = client.patch(f"/api/invoices/{inv['id']}", headers=headers, json={"paid_amount": "230"}).json()
-    assert inv["is_paid"] is True
+def test_companies_are_isolated(org):
+    sales_ids = {t["id"] for t in api.get("/api/transactions", headers=org["sales"]).json()}
+    build_ids = {t["id"] for t in api.get("/api/transactions", headers=org["build"]).json()}
+    assert sales_ids and build_ids and not sales_ids & build_ids
+    assert api.get(f"/api/transactions/{next(iter(sales_ids))}", headers=org["build"]).status_code == 404
+
+    other = api.post("/api/auth/register", json={
+        "first_name": "Eve", "last_name": "X", "email": "eve@example.com", "username": "eve", "password": "Ev3-pass-word"}).json()
+    eh = {"Authorization": f"Bearer {other['access']}"}
+    assert api.get("/api/clients", headers=eh).json() == []
+    assert api.get("/api/transactions", headers={**eh, "X-Client-Id": str(org["sales_id"])}).status_code == 404
 
 
-def test_erpnext_config_secrets_hidden(auth):
-    headers, _ = auth
-    cfg = client.post("/api/erpnext-configs", headers=headers, json={
-        "name": "Main", "base_url": "https://erp.example.com", "api_key": "k", "api_secret": "s"}).json()
-    assert "api_key" not in cfg and cfg["is_active"] is True
-    pre = client.get("/api/erpnext/sync-preflight", headers=headers).json()
-    assert pre["ready_count"] == 0 and len(pre["missing_categories"]) == 2
+def test_per_company_erpnext_accounts(org):
+    groceries = next(c for c in api.get("/api/categories", headers=org["auth"]).json() if c["name"] == "Groceries")
+    api.patch(f"/api/categories/{groceries['id']}", headers=org["sales"], json={"erpnext_account": "Groceries - SC"})
+    api.patch(f"/api/categories/{groceries['id']}", headers=org["build"], json={"erpnext_account": "Staff Food - BC"})
+    get = lambda h: next(c for c in api.get("/api/categories", headers=h).json() if c["id"] == groceries["id"])
+    assert get(org["sales"])["erpnext_account"] == "Groceries - SC"
+    assert get(org["build"])["erpnext_account"] == "Staff Food - BC"
+    assert api.patch(f"/api/categories/{groceries['id']}", headers=org["auth"],
+                     json={"erpnext_account": "x"}).status_code == 400
 
 
-def test_reconciliation(auth):
-    headers, _ = auth
-    d = client.get("/api/reconciliation/month/2025/9", headers=headers).json()
-    assert d["period"]["total_transactions"] == 3 and d["period"]["unreconciled_count"] == 3
-    r = client.post("/api/reconciliation/month/2025/9/match", headers=headers).json()
-    assert r["flagged"] == 3
-    assert client.post("/api/reconciliation/month/2025/9/close", headers=headers).status_code == 400
-    csv_out = client.get("/api/reconciliation/month/2025/9/export", headers=headers).text
-    assert "No journal entries found" in csv_out
-    tid = d["transactions"][0]["id"]
-    client.post(f"/api/reconciliation/transactions/{tid}/unmatch", headers=headers)
-    assert client.get(f"/api/transactions/{tid}", headers=headers).json()["recon_status"] == "unreconciled"
+def test_intercompany(org):
+    pairs = api.get("/api/intercompany", headers=org["auth"]).json()["pairs"]
+    assert len(pairs) == 1
+    p = pairs[0]
+    assert p["amount"] == "5000.00" and p["out"]["company"] == "Sales Co" and p["in"]["company"] == "Building Co"
+    r = api.post("/api/intercompany/confirm", headers=org["auth"], json={"out_id": p["out"]["id"], "in_id": p["in"]["id"]})
+    assert r.status_code == 200
+    assert api.get("/api/intercompany", headers=org["auth"]).json()["pairs"] == []
+    t = api.get(f"/api/transactions/{p['in']['id']}", headers=org["build"]).json()
+    assert t["category_name"] == "Intercompany Transfer"
 
 
-def test_pdf_upload_job(auth):
-    headers, _ = auth
-    from reportlab.pdfgen import canvas
-    import io
-
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf)
-    c.drawString(50, 800, "Transaction History")
-    c.drawString(50, 780, "01/10/2025 Payment Received ACME Income 250.00 750.00")
-    c.drawString(50, 760, "02/10/2025 Spar Menlyn Groceries -120.50 629.50")
-    c.save()
-    r = client.post("/api/gmail/upload-pdf", headers=headers, data={"bank_name": "capitec"},
-                    files=[("pdf_files", ("stmt.pdf", buf.getvalue(), "application/pdf"))])
-    assert r.status_code == 202, r.text
-    job_id = r.json()["job_id"]
-    for _ in range(50):
-        s = client.get(f"/api/gmail/pdf-jobs/{job_id}/status", headers=headers).json()
-        if s["status"] in ("done", "failed"):
-            break
-        time.sleep(0.1)
-    assert s["status"] == "done", s
-    assert s["transactions_saved"] == 2
+def test_dashboard(org):
+    d = api.get("/api/dashboard", headers=org["auth"]).json()
+    rows = {r["client"]["name"]: r for r in d["companies"]}
+    assert rows["Sales Co"]["transactions"] == 3 and rows["Building Co"]["uncategorized"] == 0
 
 
-def test_other_users_cannot_see_data(auth):
-    r = client.post("/api/authusers/register", json={
-        "first_name": "Eve", "last_name": "X", "email": "eve@example.com", "username": "eve", "password": "Ev3-pass-word"})
-    other = {"Authorization": f"Bearer {r.json()['access']}"}
-    assert client.get("/api/transactions", headers=other).json() == []
-    assert client.get("/api/transactions/1", headers=other).status_code == 404
-
-
-def test_parsers():
-    text = ("Transaction History\n"
-            "01/09/2025 Payment Received J Smith Other Income 1,500.00 2,500.00\n"
-            "03/09/2025 Checkers Sandton Fees -250.00 -1.00 2,249.00\n")
-    rows = CapitecParser().parse(text)
-    assert [(r["type"], r["amount"], r["category"]) for r in rows] == [("credit", 1500.0, "Other Income"),
-                                                                       ("debit", 250.0, "Sandton Fees")]
-    assert rows[1]["fee"] == 1.0 and rows[0]["date"] == date(2025, 9, 1)
-
-    tyme = TymeBankLegacyParser().parse("05 Sep 2025 Woolworths Food\n- 99.90 - 400.10\n06 Sep 2025 Salary - - 5,000.00 5,400.10\n")
-    assert [(r["type"], r["amount"]) for r in tyme] == [("debit", 99.9), ("credit", 5000.0)]
-
-    rows = parse_csv(CSV)
-    assert rows[1]["debits"] == 500 and rows[0]["credits"] == 1000 and rows[0]["reference"] == "Salary-20250923"
-
-
-def test_ai_categorize_with_mocked_groq(auth, monkeypatch):
-    headers, _ = auth
+def test_statement_inbox_assignment(org):
     from app.db import SessionLocal
-    from app.services import categorize
+    from app.models import EmailStatement
+    from app.services.gmail import guess_client
 
-    client.post("/api/transactions", headers=headers, json={
-        "date": "2025-10-05", "description": "QWERTY Streaming Co", "withdrawal": "99", "transaction_type": "debit"})
-
-    def fake(system, user):
-        assert "QWERTY Streaming Co" in user
-        return {"results": [{"i": 0, "category": "Entertainment", "confidence": 0.9, "keyword": "qwerty"}]}
-
-    monkeypatch.setattr(categorize, "groq_json", fake)
-    client.post("/api/categories", headers=headers, json={"name": "Entertainment", "transaction_type": "debit"})
     db = SessionLocal()
-    user_id = client.get("/api/authusers/me", headers=headers).json()["id"]
-    r = categorize.ai_categorize(db, user_id)
+    practice_id = api.get("/api/practice", headers=org["auth"]).json()["id"]
+    st = EmailStatement(practice_id=practice_id, source="gmail", gmail_id="g-1", subject="Your FNB statement",
+                        body_text="Account ending ...4567 statement attached")
+    assert guess_client(db, st) and st.client_id == org["sales_id"]
+    st2 = EmailStatement(practice_id=practice_id, source="gmail", gmail_id="g-2", subject="Statement", body_text="")
+    assert not guess_client(db, st2)
+    db.add(st2)
+    db.commit()
     db.close()
-    assert r["ai"] == 1
-    ent = next(c for c in client.get("/api/categories", headers=headers).json() if c["name"] == "Entertainment")
-    assert "qwerty" in ent["keywords"]
+    inbox = api.get("/api/statements?unassigned=1", headers=org["auth"]).json()
+    assert [s["gmail_id"] for s in inbox] == ["g-2"]
+    r = api.patch(f"/api/statements/{inbox[0]['id']}", headers=org["auth"], json={"client_id": org["build_id"]})
+    assert r.json()["client_id"] == org["build_id"]
+    assert api.get("/api/statements?unassigned=1", headers=org["auth"]).json() == []
 
 
-def test_erpnext_journal_entry_mocked(auth, monkeypatch):
-    headers, _ = auth
+def test_erpnext_config_secret_sealed(org):
+    cfg = api.post("/api/erpnext-configs", headers=org["auth"], json={
+        "name": "Group ERP", "base_url": "https://erp.example.com", "api_key": "k", "api_secret": "s"}).json()
+    assert "api_secret" not in cfg and cfg["is_active"] is True
+    from app.db import SessionLocal
+    from app.models import ERPNextConfig
+
+    db = SessionLocal()
+    row = db.get(ERPNextConfig, cfg["id"])
+    assert row.api_secret.startswith("enc:") and unseal(row.api_secret) == "s"
+    db.close()
+    pre = api.get("/api/erpnext/sync-preflight", headers=org["sales"]).json()
+    assert pre["company_set"] is False and pre["pending_count"] == 3
+
+
+def test_erpnext_journal_entry_mocked(org, monkeypatch):
     import app.services.erpnext as erp
 
     class Resp:
@@ -252,24 +228,90 @@ def test_erpnext_journal_entry_mocked(auth, monkeypatch):
         def raise_for_status(self):
             pass
 
-    posted = []
-    monkeypatch.setattr(erp.requests, "get", lambda url, **kw: Resp({"data": [{"name": "Test Co", "abbr": "TC"}]}))
-    monkeypatch.setattr(erp.requests, "post", lambda url, json=None, **kw: posted.append(json) or Resp({"data": {"name": "JV-0001"}}))
+    posted, got = [], []
+    monkeypatch.setattr(erp.requests, "get", lambda url, **kw: got.append(kw.get("params")) or Resp({"data": [{"name": "Sales Co (Pty) Ltd", "abbr": "SC"}]}))
+    monkeypatch.setattr(erp.requests, "post", lambda url, json=None, **kw: posted.append(json) or Resp({"data": {"name": "ACC-JV-0001"}}))
 
-    cats = client.get("/api/categories", headers=headers).json()
-    groceries = next(c for c in cats if c["name"] == "Groceries")
-    client.patch(f"/api/categories/{groceries['id']}", headers=headers, json={"erpnext_account": "Groceries - TC"})
-    cfg = client.get("/api/erpnext-configs", headers=headers).json()[0]
-    client.patch(f"/api/erpnext-configs/{cfg['id']}", headers=headers,
-                 json={"default_company": "TC", "bank_account": "Bank - TC"})
-    txn = next(t for t in client.get("/api/transactions", headers=headers).json() if t["description"] == "Checkers Sandton")
-    r = client.post(f"/api/erpnext/transactions/{txn['id']}/sync", headers=headers)
+    api.patch(f"/api/clients/{org['sales_id']}", headers=org["auth"], json={"erpnext_company": "SC"})
+    accts = api.get("/api/accounts", headers=org["sales"]).json()
+    api.patch(f"/api/accounts/{accts[0]['id']}", headers=org["sales"], json={"erpnext_account": "FNB Cheque - SC"})
+    txn = next(t for t in api.get("/api/transactions", headers=org["sales"]).json() if t["description"] == "Checkers Sandton")
+    r = api.post(f"/api/erpnext/transactions/{txn['id']}/sync", headers=org["sales"])
     assert r.status_code == 200, r.text
     je = posted[-1]
-    assert je["company"] == "Test Co"
+    assert je["company"] == "Sales Co (Pty) Ltd" and je["voucher_type"] == "Bank Entry"
     bank_row, exp_row = je["accounts"]
-    assert bank_row["account"] == "Bank - TC" and bank_row["credit_in_account_currency"] == 500.0
-    assert exp_row["debit_in_account_currency"] == 500.0
-    assert client.get(f"/api/transactions/{txn['id']}", headers=headers).json()["erpnext_journal_entry"] == "JV-0001"
-    logs = client.get("/api/erpnext-sync-logs", headers=headers).json()
-    assert logs[0]["status"] == "success"
+    assert bank_row["account"] == "FNB Cheque - SC" and bank_row["credit_in_account_currency"] == 500.0
+    assert exp_row["account"] == "Groceries - SC" and exp_row["debit_in_account_currency"] == 500.0
+    assert api.get(f"/api/transactions/{txn['id']}", headers=org["sales"]).json()["erpnext_journal_entry"] == "ACC-JV-0001"
+    assert api.get("/api/erpnext-sync-logs", headers=org["sales"]).json()[0]["status"] == "success"
+
+
+def test_ai_categorize_with_mocked_groq(org, monkeypatch):
+    from app.db import SessionLocal
+    from app.models import Client
+    from app.services import categorize
+
+    api.post("/api/transactions", headers=org["build"], json={
+        "date": "2025-10-05", "description": "QWERTY Plank Suppliers", "withdrawal": "990"})
+    monkeypatch.setattr(categorize, "groq_json", lambda s, u: {"results": [
+        {"i": 0, "category": "Materials", "confidence": 0.9, "keyword": "qwerty"}]})
+    db = SessionLocal()
+    r = categorize.ai_categorize(db, db.get(Client, org["build_id"]))
+    db.close()
+    assert r["ai"] == 1
+    mat = next(c for c in api.get("/api/categories", headers=org["auth"]).json() if c["name"] == "Materials")
+    assert "qwerty" in mat["keywords"]
+
+
+def test_reconciliation(org):
+    d = api.get("/api/reconciliation/month/2025/9", headers=org["build"]).json()
+    assert d["period"]["total_transactions"] == 2
+    assert api.post("/api/reconciliation/month/2025/9/match", headers=org["build"]).json()["flagged"] == 2
+    assert api.post("/api/reconciliation/month/2025/9/close", headers=org["build"]).status_code == 400
+    assert "No journal entries found" in api.get("/api/reconciliation/month/2025/9/export", headers=org["build"]).text
+    tid = d["transactions"][0]["id"]
+    api.post(f"/api/reconciliation/transactions/{tid}/unmatch", headers=org["build"])
+    assert api.get(f"/api/transactions/{tid}", headers=org["build"]).json()["recon_status"] == "unreconciled"
+
+
+def test_pdf_upload_job(org):
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    c.drawString(50, 800, "Transaction History")
+    c.drawString(50, 780, "01/10/2025 Payment Received ACME Other Income 250.00 750.00")
+    c.drawString(50, 760, "02/10/2025 Spar Menlyn Groceries -120.50 629.50")
+    c.save()
+    r = api.post("/api/imports/pdf", headers=org["build"], data={"bank_name": "capitec", "pdf_password": "pw"},
+                 files=[("pdf_files", ("stmt.pdf", buf.getvalue(), "application/pdf"))])
+    assert r.status_code == 202, r.text
+    job_id = r.json()["job_id"]
+    for _ in range(50):
+        s = api.get(f"/api/imports/pdf/{job_id}", headers=org["build"]).json()
+        if s["status"] in ("done", "failed"):
+            break
+        time.sleep(0.1)
+    assert s["status"] == "done", s
+    assert s["transactions_saved"] == 2
+    spar = api.get("/api/transactions?q=Spar", headers=org["build"]).json()[0]
+    assert spar["category_name"] == "Groceries"  # matched by keyword after import
+    acme = api.get("/api/transactions?q=ACME", headers=org["build"]).json()[0]
+    assert acme["tags"] == "Other Income"  # Capitec's own label kept as a hint, no junk category created
+    assert "Other Income" not in {c["name"] for c in api.get("/api/categories", headers=org["auth"]).json()}
+
+
+def test_parsers():
+    text = ("Transaction History\n"
+            "01/09/2025 Payment Received J Smith Other Income 1,500.00 2,500.00\n"
+            "03/09/2025 Checkers Sandton Fees -250.00 -1.00 2,249.00\n")
+    rows = CapitecParser().parse(text)
+    assert [(r["type"], r["amount"]) for r in rows] == [("credit", 1500.0), ("debit", 250.0)]
+    assert rows[1]["fee"] == 1.0 and rows[0]["date"] == date(2025, 9, 1)
+
+    tyme = TymeBankLegacyParser().parse("05 Sep 2025 Woolworths Food\n- 99.90 - 400.10\n06 Sep 2025 Salary - - 5,000.00 5,400.10\n")
+    assert [(r["type"], r["amount"]) for r in tyme] == [("debit", 99.9), ("credit", 5000.0)]
+
+    rows = parse_csv(SALES_CSV)
+    assert rows[1]["debits"] == 500 and rows[0]["credits"] == 12000
