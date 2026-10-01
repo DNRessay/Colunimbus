@@ -320,3 +320,96 @@ def test_cors_allows_pages_previews(monkeypatch):
     assert _re.fullmatch(rx, "https://7f3a9ccb.colunimbus.pages.dev")
     assert not _re.fullmatch(rx, "https://evil.pages.dev")
     assert not _re.fullmatch(rx, "https://colunimbus.pages.dev.evil.com")
+
+
+def test_insights_dashboard_ai_and_report(org, monkeypatch):
+    from app.config import settings
+    from app.services import categorize
+
+    o = api.get("/api/insights/overview", headers=org["auth"]).json()
+    assert o["scope"] == "All companies" and len(o["months"]) == 12
+    assert {"in_12m", "out_12m", "net_12m", "uncategorized", "bank_fees_12m"} <= o["kpis"].keys()
+    assert any(c["name"] == "Sales Co" for c in o["companies"])
+    sales_id = next(c["id"] for c in o["companies"] if c["name"] == "Sales Co")
+    one = api.get(f"/api/insights/overview?client_id={sales_id}", headers=org["auth"]).json()
+    assert one["scope"] == "Sales Co" and all(c["name"] == "Sales Co" for c in one["companies"])
+    assert api.get("/api/insights/overview?client_id=99999", headers=org["auth"]).status_code == 404
+
+    assert api.get("/api/insights/suggestions", headers=org["auth"]).json()["items"] == []  # nothing saved, no call
+    monkeypatch.setattr(settings, "groq_api_keys", ["g"])
+    calls = []
+    monkeypatch.setattr(categorize, "groq_json", lambda system, user: calls.append(user) or {"suggestions": [
+        {"title": "Cut bank charges", "detail": "R120 a month in fees.", "kind": "save", "impact": "high", "rand_per_year": 1440},
+        {"detail": "no title: dropped"}]})
+    r = api.get("/api/insights/suggestions?refresh=true", headers=org["auth"]).json()
+    assert r["items"] == [{"title": "Cut bank charges", "detail": "R120 a month in fees.", "kind": "save", "impact": "high", "value": 1440}]
+    assert api.get("/api/insights/suggestions?refresh=true", headers=org["auth"]).json()["cached"] is True and len(calls) == 1
+    assert "Sales Co" in calls[0]  # sends totals per company, no account numbers
+    assert "62001234567" not in calls[0]
+
+    monkeypatch.setattr(categorize, "groq_chat", lambda messages: "**Fine.**\nFOLLOWUPS: Where are costs? | How is cash?")
+    c = api.post("/api/insights/chat", headers=org["auth"], json={"messages": [{"role": "user", "content": "How are we doing?"}]}).json()
+    assert c == {"reply": "**Fine.**", "followups": ["Where are costs?", "How is cash?"]}
+
+    rep = api.get("/api/insights/report?start=2020-01-01&end=2030-12-31", headers=org["auth"]).json()
+    assert rep["total_income"] >= 0 and rep["net"] == round(rep["total_income"] - rep["total_expenses"], 2)
+    assert api.get("/api/insights/report?start=x&end=y", headers=org["auth"]).status_code == 400
+
+
+def test_vat_payroll_ageing_review_and_monthly_email(org, monkeypatch):
+    import datetime as dt
+    from decimal import Decimal
+
+    from app.config import settings
+    from app.db import SessionLocal
+    from app.models import ERPNextInvoice, User
+    from app.routers import tools
+    from app.services import categorize
+
+    assert tools.treatment("Groceries") == "standard" and tools.treatment("Interest Income") == "exempt"
+    assert tools.treatment("Intercompany Transfer") == "none" and tools.treatment("Salaries & Wages") == "none"
+
+    sales_id = org["sales"]["X-Client-Id"]
+    v = api.get(f"/api/tools/vat?client_id={sales_id}&start=2025-09-01&end=2025-10-31", headers=org["auth"]).json()
+    f = v["fields"]
+    assert f["4_output_tax"] == round(f["1_standard_rated_supplies"] * 15 / 115, 2)
+    assert f["20_vat_payable"] == round(f["4_output_tax"] - f["19_total_input_tax"], 2)
+    assert api.get("/api/tools/vat?client_id=99999&start=2025-09-01&end=2025-10-31", headers=org["auth"]).status_code == 404
+
+    p = api.get("/api/tools/payroll?start=2025-01-01&end=2025-12-31", headers=org["auth"]).json()
+    assert p["total"] == 0 and p["notes"]  # no payroll lines in the sample data
+
+    db = SessionLocal()
+    today = dt.date.today()
+    db.add_all([
+        ERPNextInvoice(client_id=int(sales_id), invoice_type="Sales Invoice", erp_name="SINV-1", party_name="ACME", grand_total=Decimal("1000"),
+                       outstanding_amount=Decimal("1000"), posting_date=today - dt.timedelta(days=80), due_date=today - dt.timedelta(days=50)),
+        ERPNextInvoice(client_id=int(sales_id), invoice_type="Sales Invoice", erp_name="SINV-2", party_name="Beta", grand_total=Decimal("400"),
+                       outstanding_amount=Decimal("400"), posting_date=today, due_date=today + dt.timedelta(days=30)),
+        ERPNextInvoice(client_id=int(sales_id), invoice_type="Purchase Invoice", erp_name="PINV-1", party_name="Supplier", grand_total=Decimal("300"),
+                       outstanding_amount=Decimal("300"), posting_date=today - dt.timedelta(days=100), due_date=today - dt.timedelta(days=95))])
+    db.commit()
+    a = api.get("/api/tools/ageing", headers=org["auth"]).json()
+    assert a["debtors"]["buckets"]["31-60"] == 1000 and a["debtors"]["buckets"]["current"] == 400
+    assert a["debtors"]["overdue"] == 1000 and a["debtors"]["parties"][0]["name"] == "ACME"
+    assert a["creditors"]["buckets"]["90+"] == 300
+
+    monkeypatch.setattr(settings, "groq_api_keys", ["g"])
+    calls = []
+    monkeypatch.setattr(categorize, "groq_json", lambda s, u: calls.append(u) or {"points": [{"title": "Chase ACME", "detail": "R1,000 is 50 days late.", "level": "high"}]})
+    r = api.post("/api/tools/review", headers=org["auth"], json={"topic": "ageing"}).json()
+    assert r["items"][0]["title"] == "Chase ACME" and not r["cached"]
+    assert api.post("/api/tools/review", headers=org["auth"], json={"topic": "ageing"}).json()["cached"] and len(calls) == 1
+    assert api.post("/api/tools/review", headers=org["auth"], json={"topic": "nope"}).status_code == 400
+
+    sent = []
+    import app.services.mailer as mailer
+    monkeypatch.setattr(mailer, "send_mail", lambda to, subject, body, html=None: sent.append((to, subject, html)))
+    assert api.get("/api/tools/monthly-email", headers=org["auth"]).json()["enabled"] is False
+    assert api.put("/api/tools/monthly-email", headers=org["auth"], json={"enabled": True}).json()["enabled"] is True
+    now = api.post("/api/tools/monthly-email/send-now", headers=org["auth"]).json()
+    assert now["sent_to"] == "cm@example.com" and "Profit &amp; loss by company" in sent[0][2] and "Sales Co" in sent[0][2]
+    assert tools.send_monthly(db) == 1 and tools.send_monthly(db) == 0  # once per month
+    db.query(ERPNextInvoice).delete()
+    db.commit()
+    db.close()

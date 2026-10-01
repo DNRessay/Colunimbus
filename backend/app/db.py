@@ -47,5 +47,6 @@ class Base(DeclarativeBase):
 
 def init_db():
     from . import models  # noqa: F401
+    from .routers import insights, tools  # noqa: F401  (ai_insights, ai_reviews, monthly_emails)
 
     Base.metadata.create_all(engine)

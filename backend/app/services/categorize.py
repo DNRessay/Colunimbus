@@ -107,9 +107,26 @@ def preview(db: Session, client: Client):
 # ── Groq ────────────────────────────────────────────────────────────────────
 
 _key_cycle = count()
+_model = None
+PREFERRED = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct", "qwen/qwen3-32b",
+             "openai/gpt-oss-20b", "llama-3.1-8b-instant"]
 
 
-def groq_json(system, user):
+def _pick_model(key):
+    """After Groq says the configured model is gone, use the best model this key can still use."""
+    global _model
+    try:
+        r = requests.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {key}"}, timeout=20)
+        ids = [m["id"] for m in r.json().get("data", []) if m.get("active", True)]
+    except Exception:
+        ids = []
+    chat = [i for i in ids if not re.search(r"whisper|tts|guard|playai|distil|compound", i)]
+    _model = next((p for p in PREFERRED if p in chat), chat[0] if chat else settings.groq_model)
+    log.info("Groq model switched to %s", _model)
+    return _model
+
+
+def _groq(messages, json_mode=False, temperature=0.0, max_tokens=1500):
     keys = settings.groq_api_keys
     if not keys:
         raise RuntimeError("GROQ_API_KEYS is not configured.")
@@ -117,18 +134,14 @@ def groq_json(system, user):
     last_error = None
     for i in range(len(keys)):
         key = keys[(start + i) % len(keys)]
+        body = {"temperature": temperature, "max_tokens": max_tokens, "messages": messages,
+                **({"response_format": {"type": "json_object"}} if json_mode else {})}
         try:
-            r = requests.post(
-                GROQ_URL,
-                headers={"Authorization": f"Bearer {key}"},
-                json={
-                    "model": settings.groq_model,
-                    "temperature": 0,
-                    "response_format": {"type": "json_object"},
-                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                },
-                timeout=60,
-            )
+            r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {key}"},
+                              json={"model": _model or settings.groq_model, **body}, timeout=60)
+            if r.status_code in (400, 404) and "model" in r.text.lower():
+                r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {key}"},
+                                  json={"model": _pick_model(key), **body}, timeout=60)
         except requests.RequestException as e:
             last_error = e
             continue
@@ -136,8 +149,16 @@ def groq_json(system, user):
             last_error = RuntimeError(f"Groq {r.status_code}: {r.text[:200]}")
             continue  # rotate to the next key
         r.raise_for_status()
-        return json.loads(r.json()["choices"][0]["message"]["content"])
+        return r.json()["choices"][0]["message"]["content"]
     raise RuntimeError(f"All Groq keys failed: {last_error}")
+
+
+def groq_json(system, user):
+    return json.loads(_groq([{"role": "system", "content": system}, {"role": "user", "content": user}], json_mode=True))
+
+
+def groq_chat(messages):
+    return _groq(messages, temperature=0.4, max_tokens=1200)
 
 
 SYSTEM_PROMPT = (

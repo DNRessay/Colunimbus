@@ -73,17 +73,27 @@ export async function poll(fn, done, onTick, ms = 2000, maxTries = 450) {
 export const empty = (cols, text) => `<tr><td colspan="${cols}" class="muted">${esc(text)}</td></tr>`;
 
 const LINKS = [
-  ["/dashboard.html", "Dashboard", false],
-  ["/transactions.html", "Transactions", true],
-  ["/categories.html", "Categories", true],
-  ["/imports.html", "Import", true],
-  ["/statements.html", "Statements", true],
-  ["/reconciliation.html", "Reconciliation", true],
-  ["/erpnext.html", "ERPNext sync", true],
-  ["/erp-invoices.html", "Invoices", true],
-  ["/accounts.html", "Bank accounts", true],
-  ["/companies.html", "Companies", false],
-  ["/settings.html", "Settings", false],
+  ["Overview"],
+  ["/dashboard.html", "Dashboard", false, "▦"],
+  ["/ai.html", "Ask AI", false, "✦"],
+  ["/reports.html", "Reports", false, "▤"],
+  ["Insights"],
+  ["/vat.html", "VAT 201", false, "%"],
+  ["/payroll.html", "Payroll", false, "☺"],
+  ["/ageing.html", "Debtors & creditors", false, "⏱"],
+  ["Books"],
+  ["/transactions.html", "Transactions", true, "⇄"],
+  ["/categories.html", "Categories", true, "◈"],
+  ["/imports.html", "Import", true, "⇩"],
+  ["/statements.html", "Statements", true, "✉"],
+  ["/reconciliation.html", "Reconciliation", true, "✓"],
+  ["ERPNext"],
+  ["/erpnext.html", "ERPNext sync", true, "⟳"],
+  ["/erp-invoices.html", "Invoices", true, "≣"],
+  ["Setup"],
+  ["/accounts.html", "Bank accounts", true, "▣"],
+  ["/companies.html", "Companies", false, "⌂"],
+  ["/settings.html", "Settings", false, "⚙"],
 ];
 
 // Call first on every signed-in page. needsCompany: the page works on one selected company.
@@ -105,12 +115,13 @@ export async function page({ needsCompany = true } = {}) {
   if (nav) {
     const here = location.pathname;
     nav.innerHTML = `
-      <a class="brand" href="/dashboard.html">C.T.H.A.I</a>
+      <a class="brand" href="/dashboard.html"><img src="/logo.png" alt="CT Holdings and Investment" /><span>C.T.H.A.I</span></a>
       ${active.length ? `<select id="company" aria-label="Company">${active.map(c =>
         `<option value="${c.id}" ${String(c.id) === company.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>` : ""}
       <button class="menu secondary" aria-label="Menu">☰</button>
       <div class="links">
-        ${LINKS.map(([href, label]) => `<a href="${href}" class="${here === href ? "active" : ""}">${label}</a>`).join("")}
+        ${LINKS.map(([href, label, , ico]) => label === undefined ? `<div class="group">${href}</div>`
+          : `<a href="${href}" class="${here === href ? "active" : ""}"><span class="ico" aria-hidden="true">${ico || ""}</span>${label}</a>`).join("")}
         <button id="logout" class="secondary small">Log out</button>
       </div>`;
     $(".menu", nav).addEventListener("click", () => nav.classList.toggle("open"));

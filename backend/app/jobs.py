@@ -74,6 +74,13 @@ def handle(event: dict, local_files=None):
             _run_tracked(db, event)
         elif kind == "categorize_all":
             _categorize_all(db)
+            try:
+                from .routers.tools import send_monthly
+
+                log.info("Monthly reports sent: %s", send_monthly(db))
+            except Exception:
+                db.rollback()
+                log.exception("Monthly report emails failed")
         else:
             log.error("Unknown job event: %s", event)
     finally:

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VAT 201 — C.T.H.A.I</title>
+  <link rel="icon" href="/favicon.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Work+Sans:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <div class="page-head"><h1>VAT 201 prep</h1></div>
+    <div id="msg"></div>
+    <div class="card no-print"><div class="row">
+      <select id="co" aria-label="Company"></select>
+      <select id="preset" aria-label="Period">
+        <option value="a">Last VAT period · Category A (Jan–Feb, Mar–Apr…)</option>
+        <option value="b">Last VAT period · Category B (Feb–Mar, Apr–May…)</option>
+        <option value="month">Last month</option><option value="custom">Custom…</option></select>
+      <input type="date" id="start" aria-label="From" /><input type="date" id="end" aria-label="To" />
+      <button type="button" id="go">Work it out</button><button type="button" class="secondary" onclick="print()">Print</button></div></div>
+    <section class="kpis" id="kpis"></section>
+    <div class="rep-grid">
+      <div class="card"><h3>VAT 201 fields (draft)</h3><table><tbody id="fields"></tbody></table><ul id="notes" class="muted"></ul></div>
+      <div class="card ai-card" id="ai"></div>
+    </div>
+    <div class="rep-grid">
+      <div class="card"><h3>Sales by category</h3><table><thead><tr><th>Category</th><th>Treatment</th><th class="num">Incl. VAT</th></tr></thead><tbody id="sales"></tbody></table></div>
+      <div class="card"><h3>Purchases by category</h3><table><thead><tr><th>Category</th><th>Treatment</th><th class="num">Incl. VAT</th></tr></thead><tbody id="purch"></tbody></table></div>
+    </div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, esc, flash, money, page } from "/js/ui.js";
+    import { aiReview, chart, css, inOutChart, monthLabel, randTick } from "/js/viz.js";
+    const ctx = await page({ needsCompany: false });
+    const active = ctx.companies.filter(c => c.is_active);
+    const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const TREAT = { standard: ["15%", "ok"], zero: ["0%", ""], exempt: ["exempt", "warn"], none: ["outside VAT", ""] };
+    $("#co").innerHTML = active.sort((a, b) => b.vat_registered - a.vat_registered)
+      .map(c => `<option value="${c.id}" ${ctx.current && c.id === ctx.current.id ? "selected" : ""}>${esc(c.name)}${c.vat_registered ? "" : " (not VAT-registered)"}</option>`).join("");
+    function period(v) {
+      const now = new Date(), y = now.getFullYear(), m = now.getMonth();
+      if (v === "month") return [new Date(y, m - 1, 1), new Date(y, m, 0)];
+      // Category A periods end on even months (Feb, Apr…); B on odd (Mar, May…). Take the last one fully past.
+      const endsOdd = v === "b";
+      let end = m - 1;  // last complete month (0-based)
+      while (((end % 12) + 12) % 12 % 2 !== (endsOdd ? 0 : 1)) end--;
+      return [new Date(y, end - 1, 1), new Date(y, end + 1, 0)];
+    }
+    function preset() { const r = period($("#preset").value); if (r) { $("#start").value = iso(r[0]); $("#end").value = iso(r[1]); } }
+    $("#preset").addEventListener("change", () => { preset(); if ($("#preset").value !== "custom") load(); });
+    ["#co"].forEach(s => $(s).addEventListener("change", () => load()));
+    $("#go").addEventListener("click", () => load());
+    const rows = (list) => list.map(r => `<tr><td>${esc(r.category)}</td><td><span class="badge ${TREAT[r.treatment][1]}">${TREAT[r.treatment][0]}</span></td>
+      <td class="num">${money(r.amount)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Nothing in this period.</td></tr>`;
+    async function load() {
+      try {
+        const v = await api.vat($("#co").value, $("#start").value, $("#end").value), f = v.fields;
+        $("#kpis").innerHTML = `<div class="kpi"><small>Output VAT (on sales)</small><b>${money(f["4_output_tax"])}</b></div>
+          <div class="kpi red"><small>Input VAT (on purchases)</small><b>${money(f["19_total_input_tax"])}</b></div>
+          <div class="kpi navy"><small>${f["20_vat_payable"] >= 0 ? "VAT to pay SARS" : "VAT refund due"}</small><b class="${f["20_vat_payable"] >= 0 ? "down" : "up"}">${money(Math.abs(f["20_vat_payable"]))}</b>
+          <span class="delta muted">${v.period.start} to ${v.period.end}</span></div>`;
+        const F = [["1", "Standard-rated supplies (incl. VAT)", "1_standard_rated_supplies"], ["2", "Zero-rated supplies", "2_zero_rated_supplies"],
+          ["3", "Exempt supplies", "3_exempt_supplies"], ["4", "Output tax", "4_output_tax"], ["15", "Input tax: other goods and services", "15_input_tax_other"],
+          ["19", "Total input tax", "19_total_input_tax"], ["20", "VAT payable / (refundable)", "20_vat_payable"]];
+        $("#fields").innerHTML = F.map(([n, l, k]) => `<tr${n === "20" ? ' class="tot"' : ""}><td><b>${n}</b></td><td>${l}</td><td class="num">${money(f[k])}</td></tr>`).join("");
+        $("#notes").innerHTML = v.notes.map(n => `<li>${esc(n)}</li>`).join("");
+        $("#sales").innerHTML = rows(v.sales); $("#purch").innerHTML = rows(v.purchases);
+      } catch (e) { flash(e.message, "err"); }
+    }
+    aiReview("#ai", () => ({ topic: "vat", client_id: +$("#co").value, start: $("#start").value, end: $("#end").value }), api);
+    preset(); load();
+  </script>
+</body>
+</html>

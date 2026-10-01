@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ask AI — C.T.H.A.I</title>
+  <link rel="icon" href="/favicon.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Work+Sans:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <div class="page-head"><h1>Ask AI</h1>
+      <div class="row"><select id="ai-scope" aria-label="About"></select><button type="button" class="secondary small" id="ai-new">New chat</button></div></div>
+    <div id="msg"></div>
+    <div class="card chat-wrap">
+      <div class="chat-log" id="log" aria-live="polite"></div>
+      <div class="chips" id="chips"></div>
+      <form class="composer" id="form">
+        <textarea name="q" rows="1" placeholder="Ask about income, costs, cash flow, fees, VAT prep…" required></textarea>
+        <button type="submit">Send</button>
+      </form>
+      <p class="muted" style="margin:0.4rem 0 0"><small>Groq, using your companies' totals (no account numbers). Not accounting or tax advice.</small></p>
+    </div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, esc, flash, page } from "/js/ui.js";
+    import { md } from "/js/viz.js";
+    const ctx = await page({ needsCompany: false });
+    const STARTERS = ["How did we do this month?", "Where can we cut costs?", "Which company makes the most money?",
+      "How much do bank fees cost us?", "What should I fix in the books first?", "Is our cash flow healthy?"];
+    $("#ai-scope").innerHTML = `<option value="">All companies</option>` + ctx.companies.filter(c => c.is_active)
+      .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    let msgs = [];
+    try { msgs = JSON.parse(sessionStorage.getItem("cthai-chat") || "[]"); } catch { msgs = []; }
+    const save = () => { try { sessionStorage.setItem("cthai-chat", JSON.stringify(msgs.slice(-30))); } catch {} };
+    function render(thinking = false) {
+      $("#log").innerHTML = msgs.length ? msgs.map(m => `<div class="msg-b ${m.role}">${m.role === "user" ? esc(m.content) : md(m.content)}</div>`).join("")
+        + (thinking ? `<div class="msg-b assistant muted">Thinking…</div>` : "")
+        : `<div style="margin:auto;text-align:center"><h2>Ask about your business numbers</h2>
+           <p class="muted">The AI sees the last 12 months: money in and out per company, categories, fees and what needs fixing.</p></div>`;
+      const last = [...msgs].reverse().find(m => m.role === "assistant");
+      const ups = !thinking && last?.followups?.length ? last.followups : msgs.length ? [] : STARTERS;
+      $("#chips").innerHTML = ups.map(q => `<button type="button" class="secondary small chip">${esc(q)}</button>`).join("");
+      $("#log").scrollTop = $("#log").scrollHeight;
+    }
+    async function ask(q) {
+      q = q.trim(); if (!q) return;
+      msgs.push({ role: "user", content: q }); render(true);
+      try {
+        const r = await api.aiChat(msgs.map(({ role, content }) => ({ role, content })), $("#ai-scope").value || null);
+        msgs.push({ role: "assistant", content: r.reply, followups: r.followups });
+      } catch (e) { msgs.push({ role: "assistant", content: `Couldn't answer: ${e.message}` }); }
+      save(); render();
+    }
+    $("#chips").addEventListener("click", (e) => { const c = e.target.closest(".chip"); if (c) ask(c.textContent); });
+    const box = $("#form").q;
+    box.addEventListener("input", () => { box.style.height = "auto"; box.style.height = Math.min(box.scrollHeight, 160) + "px"; });
+    box.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#form").requestSubmit(); } });
+    $("#form").addEventListener("submit", (e) => { e.preventDefault(); const q = box.value; box.value = ""; ask(q); });
+    $("#ai-new").addEventListener("click", () => { msgs = []; save(); render(); });
+    render();
+  </script>
+</body>
+</html>
