@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reports — C.T.H.A.I</title>
+  <link rel="icon" href="/favicon.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Work+Sans:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <div class="page-head no-print"><h1>Reports</h1></div>
+    <div id="msg"></div>
+    <div class="card no-print">
+      <div class="row">
+        <select id="scope" aria-label="Company"></select>
+        <select id="preset" aria-label="Period">
+          <option value="this-month">This month</option><option value="last-month">Last month</option><option value="quarter">Last 3 months</option>
+          <option value="fy" selected>This financial year (Mar–Feb)</option><option value="last-fy">Last financial year</option><option value="custom">Custom…</option>
+        </select>
+        <input type="date" id="start" aria-label="From" /><input type="date" id="end" aria-label="To" />
+        <button type="button" id="make">Make report</button>
+        <button type="button" class="secondary" id="print">Print / save PDF</button>
+      </div>
+      <p class="muted" style="margin:0.5rem 0 0">Profit &amp; loss and cash flow from categorised bank transactions. Transfers between your own companies are left out.</p>
+    </div>
+    <article class="report-doc" id="doc"></article>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, esc, flash, money, page } from "/js/ui.js";
+    import { inOutChart } from "/js/viz.js";
+    const ctx = await page({ needsCompany: false });
+    $("#scope").innerHTML = `<option value="">All companies</option>` + ctx.companies.filter(c => c.is_active)
+      .map(c => `<option value="${c.id}" ${ctx.current && c.id === ctx.current.id ? "selected" : ""}>${esc(c.name)}</option>`).join("");
+    const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    function range(v) {
+      const now = new Date(), y = now.getFullYear(), m = now.getMonth(), fy = m >= 2 ? y : y - 1;
+      return { "this-month": [new Date(y, m, 1), now], "last-month": [new Date(y, m - 1, 1), new Date(y, m, 0)],
+        quarter: [new Date(y, m - 2, 1), now], fy: [new Date(fy, 2, 1), now], "last-fy": [new Date(fy - 1, 2, 1), new Date(fy, 2, 0)] }[v];
+    }
+    function preset() { const r = range($("#preset").value); if (r) { $("#start").value = iso(r[0]); $("#end").value = iso(r[1]); } }
+    $("#preset").addEventListener("change", () => { preset(); if ($("#preset").value !== "custom") make(); });
+    ["#start", "#end"].forEach(i => $(i).addEventListener("change", () => { $("#preset").value = "custom"; }));
+    $("#scope").addEventListener("change", () => make());
+    $("#make").addEventListener("click", () => make());
+    $("#print").addEventListener("click", () => window.print());
+    const lines = (rows, total, cls) => `<table><tbody>${rows.map(r => `<tr><td>${esc(r.name)}</td><td class="num ${cls}">${money(r.amount)}</td>
+      <td class="num muted">${total ? (r.amount / total * 100).toFixed(0) + "%" : ""}</td></tr>`).join("")}
+      <tr class="tot"><td>Total</td><td class="num">${money(total)}</td><td></td></tr></tbody></table>`;
+    async function make() {
+      try {
+        const r = await api.report($("#start").value, $("#end").value, $("#scope").value || null);
+        $("#doc").innerHTML = `
+          <header class="rep-head"><div><img src="/logo.png" alt="CT Holdings and Investment" height="56" />
+            <h1>Profit &amp; loss</h1><p class="muted" style="margin:0">${esc(r.scope)} · ${r.period.start} to ${r.period.end}</p></div>
+            <div style="text-align:right"><small class="muted">Made ${r.generated_at.slice(0, 10)}</small></div></header>
+          <section class="kpis">
+            <div class="kpi"><small>Income</small><b>${money(r.total_income)}</b></div>
+            <div class="kpi red"><small>Expenses</small><b>${money(r.total_expenses)}</b></div>
+            <div class="kpi navy"><small>Net profit</small><b class="${r.net < 0 ? "down" : "up"}">${money(r.net)}</b><span class="delta muted">${r.margin != null ? r.margin + "% margin" : ""}</span></div>
+            <div class="kpi red"><small>Bank fees</small><b>${money(r.bank_fees)}</b></div>
+          </section>
+          ${r.notes.length ? `<section><h2>Notes</h2><ul>${r.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul></section>` : ""}
+          <section class="rep-grid"><div><h2>Income</h2>${lines(r.income, r.total_income, "up")}</div>
+            <div><h2>Expenses</h2>${lines(r.expenses, r.total_expenses, "down")}</div></section>
+          <section><h2>Cash flow by month</h2><div class="chart-box short"><canvas id="rep-io" role="img" aria-label="Money in and out per month"></canvas></div>
+            <table><thead><tr><th>Month</th><th class="num">In</th><th class="num">Out</th><th class="num">Net</th></tr></thead><tbody>
+            ${r.months.map(m => `<tr><td>${m.month}</td><td class="num">${money(m.in)}</td><td class="num">${money(m.out)}</td>
+              <td class="num ${m.net < 0 ? "neg" : ""}">${money(m.net)}</td></tr>`).join("")}</tbody></table></section>
+          <p class="muted"><small>From bank transactions in C.T.H.A.I. A management report, not audited financial statements.</small></p>`;
+        inOutChart("#rep-io", r.months.map(m => m.month), r.months.map(m => m.in), r.months.map(m => m.out));
+      } catch (e) { flash(e.message, "err"); }
+    }
+    preset(); make();
+  </script>
+</body>
+</html>

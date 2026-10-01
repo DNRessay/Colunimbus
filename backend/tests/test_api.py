@@ -320,3 +320,37 @@ def test_cors_allows_pages_previews(monkeypatch):
     assert _re.fullmatch(rx, "https://7f3a9ccb.colunimbus.pages.dev")
     assert not _re.fullmatch(rx, "https://evil.pages.dev")
     assert not _re.fullmatch(rx, "https://colunimbus.pages.dev.evil.com")
+
+
+def test_insights_dashboard_ai_and_report(org, monkeypatch):
+    from app.config import settings
+    from app.services import categorize
+
+    o = api.get("/api/insights/overview", headers=org["auth"]).json()
+    assert o["scope"] == "All companies" and len(o["months"]) == 12
+    assert {"in_12m", "out_12m", "net_12m", "uncategorized", "bank_fees_12m"} <= o["kpis"].keys()
+    assert any(c["name"] == "Sales Co" for c in o["companies"])
+    sales_id = next(c["id"] for c in o["companies"] if c["name"] == "Sales Co")
+    one = api.get(f"/api/insights/overview?client_id={sales_id}", headers=org["auth"]).json()
+    assert one["scope"] == "Sales Co" and all(c["name"] == "Sales Co" for c in one["companies"])
+    assert api.get("/api/insights/overview?client_id=99999", headers=org["auth"]).status_code == 404
+
+    assert api.get("/api/insights/suggestions", headers=org["auth"]).json()["items"] == []  # nothing saved, no call
+    monkeypatch.setattr(settings, "groq_api_keys", ["g"])
+    calls = []
+    monkeypatch.setattr(categorize, "groq_json", lambda system, user: calls.append(user) or {"suggestions": [
+        {"title": "Cut bank charges", "detail": "R120 a month in fees.", "kind": "save", "impact": "high", "rand_per_year": 1440},
+        {"detail": "no title: dropped"}]})
+    r = api.get("/api/insights/suggestions?refresh=true", headers=org["auth"]).json()
+    assert r["items"] == [{"title": "Cut bank charges", "detail": "R120 a month in fees.", "kind": "save", "impact": "high", "value": 1440}]
+    assert api.get("/api/insights/suggestions?refresh=true", headers=org["auth"]).json()["cached"] is True and len(calls) == 1
+    assert "Sales Co" in calls[0]  # sends totals per company, no account numbers
+    assert "62001234567" not in calls[0]
+
+    monkeypatch.setattr(categorize, "groq_chat", lambda messages: "**Fine.**\nFOLLOWUPS: Where are costs? | How is cash?")
+    c = api.post("/api/insights/chat", headers=org["auth"], json={"messages": [{"role": "user", "content": "How are we doing?"}]}).json()
+    assert c == {"reply": "**Fine.**", "followups": ["Where are costs?", "How is cash?"]}
+
+    rep = api.get("/api/insights/report?start=2020-01-01&end=2030-12-31", headers=org["auth"]).json()
+    assert rep["total_income"] >= 0 and rep["net"] == round(rep["total_income"] - rep["total_expenses"], 2)
+    assert api.get("/api/insights/report?start=x&end=y", headers=org["auth"]).status_code == 400

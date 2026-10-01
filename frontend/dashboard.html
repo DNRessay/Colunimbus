@@ -4,15 +4,33 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dashboard — C.T.H.A.I</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Work+Sans:wght@400;500;600;700&display=swap" />
   <link rel="stylesheet" href="/css/style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
 <body>
   <nav id="nav"></nav>
   <main>
-    <h1>Dashboard</h1>
+    <div class="page-head"><h1>Dashboard <small class="muted" id="scope-name"></small></h1>
+      <div class="seg" role="group" aria-label="Show"><button type="button" class="on" data-scope="all">All companies</button><button type="button" data-scope="one" id="scope-one">This company</button></div></div>
     <div id="msg"></div>
     <div id="inbox"></div>
+    <section class="kpis" id="kpis"></section>
+    <section class="charts">
+      <div class="card"><h3>Money in vs out, last 12 months</h3>
+        <div class="legend"><span><i style="background:var(--accent)"></i>Money in</span><span><i style="background:var(--red)"></i>Money out</span></div>
+        <div class="chart-box"><canvas id="io-chart" role="img" aria-label="Money in and out per month"></canvas></div></div>
+      <div class="card"><h3>Where the money goes</h3>
+        <div class="pie-row"><div class="chart-box short"><canvas id="cat-chart" role="img" aria-label="Expenses by category"></canvas></div><div id="cat-legend"></div></div></div>
+      <div class="card"><h3>Companies compared (12 months)</h3>
+        <div class="legend"><span><i style="background:var(--accent)"></i>In</span><span><i style="background:var(--red)"></i>Out</span></div>
+        <div class="chart-box short" id="co-box"><canvas id="co-chart" role="img" aria-label="Money in and out per company"></canvas></div></div>
+      <div class="card ai-card" id="ai-box"></div>
+    </section>
+    <h2>Companies</h2>
     <div class="card table-wrap">
       <table>
         <thead><tr><th>Company</th><th class="num">Transactions</th><th class="num">This month</th><th class="num">Uncategorized</th><th class="num">Not in ERPNext</th><th>Latest</th><th id="closed-head">Last month</th></tr></thead>
@@ -31,7 +49,68 @@
   <script type="module">
     import { api, company } from "/js/api.js";
     import { $, $$, badge, empty, esc, flash, money, page } from "/js/ui.js";
-    await page({ needsCompany: false });
+    import { chart, css, donut, inOutChart, randTick } from "/js/viz.js";
+    const ctx = await page({ needsCompany: false });
+
+    // KPIs, charts and AI suggestions, for all companies or the selected one.
+    let scope = sessionStorage.getItem("dash-scope") === "one" && ctx.current ? "one" : "all";
+    const cid = () => scope === "one" ? ctx.current?.id : null;
+    $("#scope-one").hidden = !ctx.current;
+    $("#scope-one").textContent = ctx.current ? ctx.current.name : "This company";
+    $$(".seg button").forEach(b => b.addEventListener("click", () => {
+      scope = b.dataset.scope; try { sessionStorage.setItem("dash-scope", scope); } catch {}
+      loadInsights().catch(e => flash(e.message, "err"));
+    }));
+    const pctChange = (now, before) => before ? (now - before) / before * 100 : null;
+    const delta = (now, before, goodUp = true) => {
+      const p = pctChange(now, before);
+      if (p == null) return `<span class="delta muted">no data last month</span>`;
+      const good = goodUp ? p >= 0 : p <= 0;
+      return `<span class="delta ${good ? "up" : "down"}">${p >= 0 ? "▲" : "▼"} ${Math.abs(p).toFixed(0)}% vs last month</span>`;
+    };
+    async function loadInsights() {
+      $$(".seg button").forEach(b => b.classList.toggle("on", b.dataset.scope === scope));
+      const d = await api.insights(cid());
+      const k = d.kpis;
+      $("#scope-name").textContent = `· ${d.scope}`;
+      $("#kpis").innerHTML = `
+        <div class="kpi"><small>Money in · this month</small><b>${money(k.in_this_month)}</b>${delta(k.in_this_month, k.in_last_month)}</div>
+        <div class="kpi red"><small>Money out · this month</small><b>${money(k.out_this_month)}</b>${delta(k.out_this_month, k.out_last_month, false)}</div>
+        <div class="kpi navy"><small>Net cash flow · 12 months</small><b class="${k.net_12m < 0 ? "down" : "up"}">${money(k.net_12m)}</b>
+          <span class="delta muted">${k.margin_12m != null ? `${k.margin_12m}% margin` : ""}</span></div>
+        <div class="kpi red"><small>Bank fees · 12 months</small><b>${money(k.bank_fees_12m)}</b><span class="delta muted">${money(k.bank_fees_12m / 12)} a month</span></div>
+        <div class="kpi navy"><small>To fix</small><b>${k.uncategorized + k.not_synced}</b>
+          <span class="delta muted">${k.uncategorized} uncategorised · ${k.not_synced} not in ERPNext</span></div>`;
+      inOutChart("#io-chart", d.months.map(m => m.month), d.months.map(m => m.in), d.months.map(m => m.out));
+      if (d.expenses_by_category.length) donut("#cat-chart", "#cat-legend", d.expenses_by_category);
+      else $("#cat-legend").innerHTML = `<p class="muted">No categorised expenses yet.</p>`;
+      const cos = d.companies.slice(0, 10);
+      $("#co-box").style.height = `${Math.max(160, cos.length * 44 + 40)}px`;
+      chart("#co-chart", { type: "bar", data: { labels: cos.map(c => c.name), datasets: [
+          { label: "In", data: cos.map(c => c.in), backgroundColor: css("--accent"), borderRadius: 4, maxBarThickness: 14 },
+          { label: "Out", data: cos.map(c => c.out), backgroundColor: css("--red"), borderRadius: 4, maxBarThickness: 14 }] },
+        options: { indexAxis: "y", interaction: { mode: "index", intersect: false },
+          plugins: { tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${money(c.parsed.x)}` } } },
+          scales: { x: { ticks: { callback: randTick, maxTicksLimit: 5 } }, y: { grid: { display: false } } } } });
+      loadAI().catch(() => {});
+    }
+    const KIND = { save: "Save money", cash: "Cash flow", risk: "Risk", books: "Bookkeeping", grow: "Growth" };
+    async function loadAI(refresh = false) {
+      const box = $("#ai-box");
+      const head = (btn) => `<div class="ai-head"><h3><span class="cl-icon" aria-hidden="true">i</span> AI suggestions</h3>${btn}</div>`;
+      if (refresh) box.innerHTML = head("") + `<p class="muted">Reading your books…</p>`;
+      let r;
+      try { r = await api.aiSuggestions(cid(), refresh); }
+      catch (e) { box.innerHTML = head("") + `<p class="muted">${esc(e.message)}</p>`; return; }
+      const wait = r.next_refresh_at && new Date(r.next_refresh_at + "Z") > new Date();
+      const btn = `<button type="button" class="small secondary" id="ai-go"${wait ? " disabled" : ""}>${r.items.length ? (wait ? "Refreshes later" : "Refresh") : "Suggest improvements"}</button>`;
+      box.innerHTML = head(btn) + (r.items.length ? `<ol class="ai-list">${r.items.map(i => `<li><span class="kind ${i.kind}">${KIND[i.kind] || i.kind}</span>
+          <strong>${esc(i.title)}</strong>${i.value ? ` <small class="muted">· about ${money(i.value)} a year</small>` : ""}<br>${esc(i.detail)}</li>`).join("")}</ol>
+          <p class="muted"><small>Groq, ${(r.created_at || "").slice(0, 10)}; saved so it doesn't use your quota. Not accounting or tax advice. <a href="/ai.html">Ask AI more →</a></small></p>`
+        : `<p class="muted">Cost savings, cash-flow risks and bookkeeping fixes, from your numbers (totals only, no account numbers).</p>`);
+      $("#ai-go")?.addEventListener("click", () => loadAI(true));
+    }
+    loadInsights().catch(e => flash(e.message, "err"));
 
     const open = (id, href) => `<a href="${href}" data-company="${id}" class="go">`;
     async function load() {

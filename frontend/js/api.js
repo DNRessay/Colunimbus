@@ -115,6 +115,10 @@ export const api = {
   updateCompany: (id, b) => patch(`/api/clients/${id}`, b),
   deleteCompany: (id) => del(`/api/clients/${id}`),
   dashboard: () => get("/api/dashboard"),
+  insights: (clientId) => get(`/api/insights/overview${clientId ? `?client_id=${clientId}` : ""}`),
+  aiSuggestions: (clientId, refresh) => get(`/api/insights/suggestions?${new URLSearchParams({ ...(clientId ? { client_id: clientId } : {}), ...(refresh ? { refresh: "true" } : {}) })}`),
+  aiChat: (messages, clientId) => post("/api/insights/chat", { messages, client_id: clientId || null }),
+  report: (start, end, clientId) => get(`/api/insights/report?${new URLSearchParams({ start, end, ...(clientId ? { client_id: clientId } : {}) })}`),
   intercompany: () => get("/api/intercompany"),
   confirmIntercompany: (out_id, in_id) => post("/api/intercompany/confirm", { out_id, in_id }),
 
