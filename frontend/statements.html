@@ -55,7 +55,7 @@
 
     async function load() {
       const rows = await api.statements();
-      const state = (s) => badge(s.state, s.state === "parsed" ? "ok" : s.state === "error" ? "err" : "");
+      const state = (s) => badge(s.state, s.state === "parsed" ? "ok" : s.state === "error" ? "err" : s.state === "locked" ? "warn" : "");
       $("#rows").innerHTML = rows.map(s => `<tr>
         <td>${esc(s.subject)}<br><small class="muted">${esc(s.source === "gmail" ? s.sender : "Uploaded")}</small>${s.error_message ? `<br><small class="muted">${esc(s.error_message)}</small>` : ""}</td>
         <td>${s.source === "gmail" && !s.transaction_count

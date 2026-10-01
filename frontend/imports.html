@@ -44,8 +44,9 @@
     </div>
 
     <div class="card">
-      <h3>Gmail</h3>
-      <p class="muted">Pulls bank statement emails from your mailbox into the <a href="/statements.html">Statements</a> inbox. Emails that mention a known account number are assigned to the right company automatically.</p>
+      <h3>Gmail statement reader</h3>
+      <p class="muted">Finds statement emails from Capitec, FNB, Absa, Standard Bank, Nedbank, TymeBank, GoTyme, Discovery, Investec, African Bank, Bank Zero and Yoco, then reads them straight into the books. No ERPNext needed. It also catches <a href="/payshap.html">PayShap</a> payment notifications. Runs by itself every night; use the button to run it now.</p>
+      <p class="muted"><small>Emails mentioning a known account number go to that company; with one company, everything goes to it. Others wait in the <a href="/statements.html">Statements</a> inbox.</small></p>
       <p id="status" class="muted">Checking…</p>
       <div class="row">
         <button id="btn-connect" hidden>Connect Gmail</button>
@@ -54,6 +55,24 @@
       </div>
     </div>
 
+    <div class="card">
+      <h3>Statement passwords</h3>
+      <p class="muted">Most banks lock statement PDFs (often with an ID number, company registration number or account number). Add them once; every statement is tried with each one. Stored encrypted and never shown again.</p>
+      <form id="pw-form" class="fields">
+        <div class="field"><label>Label</label><input name="label" placeholder="e.g. Director ID, Reg number" /></div>
+        <div class="field"><label>Password</label><input name="password" type="password" autocomplete="off" required /></div>
+        <div class="field" style="align-self:end"><button type="submit">Add password</button></div>
+      </form>
+      <ul id="pw-list" class="plain"></ul>
+    </div>
+    <div class="card">
+      <h3>Yoco card machine</h3>
+      <p class="muted">Export sales from the Yoco Business Portal (Sales → Export as CSV) and upload it here, or let the Gmail reader pick up Yoco's emailed CSVs. Each sale is booked as income at its full amount and Yoco's fees as a cost. Yoco's payouts into the bank then count as a transfer, so sales aren't counted twice.</p>
+      <form id="yoco-form">
+        <div class="field"><input type="file" name="csv_files" accept=".csv" multiple required /></div>
+        <button type="submit">Upload Yoco export</button>
+      </form>
+    </div>
     <h2>Recent PDF uploads</h2>
     <div class="card table-wrap"><table>
       <thead><tr><th>Files</th><th>Bank</th><th>Status</th><th class="num">Found</th><th class="num">Saved</th><th class="num">Duplicates</th></tr></thead>
@@ -97,9 +116,31 @@
     action($("#btn-connect"), async () => { location.href = (await api.gmailConnect()).auth_url; });
     action($("#btn-disconnect"), async () => { await api.gmailDisconnect(); flash("Gmail disconnected."); refresh(); });
     action($("#btn-fetch"), async () => {
-      flash("Searching Gmail…", "warn");
-      flash((await api.gmailFetch()).message + " Review them on the Statements page.");
+      flash("Searching Gmail and reading statements…", "warn");
+      const r = await api.gmailFetch();
+      flash(r.message + (r.locked ? " Add the password below and run it again." : ""), r.locked || r.failed ? "warn" : "ok");
     });
+    async function loadPasswords() {
+      const list = await api.statementPasswords();
+      $("#pw-list").innerHTML = list.map(p => `<li class="row"><span>🔒 ${esc(p.label)} <small class="muted">added ${p.added}</small></span>
+        <button class="secondary small pw-del" data-id="${p.id}">Remove</button></li>`).join("") || `<li class="muted">No passwords saved yet.</li>`;
+    }
+    onSubmit($("#pw-form"), async (d, e) => {
+      await api.addStatementPassword(d.label, d.password);
+      e.target.reset();
+      flash("Password saved. Locked statements will be tried again on the next Gmail run.");
+      loadPasswords();
+    });
+    $("#pw-list").addEventListener("click", async (e) => {
+      const b = e.target.closest(".pw-del");
+      if (!b || !confirm("Remove this password?")) return;
+      try { await api.deleteStatementPassword(b.dataset.id); loadPasswords(); } catch (err) { flash(err.message, "err"); }
+    });
+    onSubmit($("#yoco-form"), async (_, e) => {
+      flash((await api.uploadYoco(new FormData(e.target))).message);
+      e.target.reset();
+    });
+    loadPasswords().catch(() => {});
 
     onSubmit($("#pdf-form"), async (_, e) => {
       const { job_id } = await api.uploadPdf(new FormData(e.target));

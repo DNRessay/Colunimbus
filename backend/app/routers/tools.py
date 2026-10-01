@@ -41,8 +41,11 @@ def _lines(db: Session, clients, start: date, end: date):
     ids = [c.id for c in clients]
     if not ids:
         return []
-    return list(db.scalars(select(BankTransaction).where(BankTransaction.client_id.in_(ids), BankTransaction.date >= start,
-                                                         BankTransaction.date <= end)))
+    from ..services import yoco
+
+    with_yoco = yoco.clients_with_yoco(db, ids)
+    return [t for t in db.scalars(select(BankTransaction).where(BankTransaction.client_id.in_(ids), BankTransaction.date >= start,
+                                                                BankTransaction.date <= end)) if not yoco.is_payout(t, with_yoco)]
 
 
 def _period(start: str, end: str):

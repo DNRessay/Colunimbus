@@ -419,3 +419,31 @@ class AccessRequest(Base):
     company: Mapped[str] = text(200)
     message: Mapped[str] = text()
     created_at: Mapped[datetime] = created()
+
+
+class StatementPassword(Base):
+    """Passwords that open the practice's statement PDFs (sealed). Tried on every Gmail statement, so nobody types them."""
+
+    __tablename__ = "statement_passwords"
+    id: Mapped[int] = pk()
+    practice_id: Mapped[int] = fk("practices.id")
+    label: Mapped[str] = text(100)
+    secret: Mapped[str] = text()
+    created_at: Mapped[datetime] = created()
+
+
+class PayShapNotice(Base):
+    """A PayShap payment caught from the bank's notification email, before (and matched to) the statement line."""
+
+    __tablename__ = "payshap_notices"
+    id: Mapped[int] = pk()
+    practice_id: Mapped[int] = fk("practices.id")
+    client_id: Mapped[Optional[int]] = fk("clients.id", "CASCADE", True)
+    gmail_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    direction: Mapped[str] = text(10)  # in | out
+    amount: Mapped[Decimal] = mapped_column(Money, nullable=False)
+    counterparty: Mapped[str] = text(200)
+    reference: Mapped[str] = text(200)
+    subject: Mapped[str] = text(500)
+    transaction_id: Mapped[Optional[int]] = fk("bank_transactions.id", "SET NULL", True)

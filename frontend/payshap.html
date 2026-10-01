@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PayShap — C.T.H.A.I</title>
+  <link rel="icon" href="/favicon.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Work+Sans:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <div class="page-head"><h1>PayShap</h1></div>
+    <p class="muted">Instant PayShap payments in and out. Bank notification emails are caught the moment a payment lands (via the Gmail reader), then ticked off when the same payment shows up on a statement.</p>
+    <div id="msg"></div>
+    <div class="card no-print"><div class="row"><select id="co" aria-label="Company"></select>
+      <select id="days" aria-label="Period"><option value="30">Last 30 days</option><option value="90" selected>Last 90 days</option><option value="365">Last 12 months</option></select></div></div>
+    <section class="kpis" id="kpis"></section>
+    <h2>Caught from notifications</h2>
+    <div class="card table-wrap"><table><thead><tr><th>When</th><th>From / to</th><th>Reference</th><th class="num">Amount</th><th>On a statement?</th></tr></thead><tbody id="notices"></tbody></table></div>
+    <h2>PayShap lines on statements</h2>
+    <div class="card table-wrap"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Amount</th><th>Notified</th></tr></thead><tbody id="lines"></tbody></table></div>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, badge, empty, esc, flash, money, page } from "/js/ui.js";
+    const ctx = await page({ needsCompany: false });
+    const active = ctx.companies.filter(c => c.is_active);
+    const name = Object.fromEntries(active.map(c => [c.id, c.name]));
+    $("#co").innerHTML = `<option value="">All companies</option>` + active.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    const many = () => !$("#co").value && active.length > 1;
+    async function load() {
+      try {
+        const s = await api.payshap($("#days").value, $("#co").value || null);
+        $("#kpis").innerHTML = `<div class="kpi navy"><small>Received via PayShap</small><b class="up">${money(s.received)}</b><span class="delta muted">${s.count} statement line(s)</span></div>
+          <div class="kpi red"><small>Sent via PayShap</small><b>${money(s.sent)}</b></div>
+          <div class="kpi"><small>Caught, not on a statement yet</small><b>${money(s.pending_in)}</b><span class="delta muted">coming in · ${money(s.pending_out)} going out</span></div>`;
+        $("#notices").innerHTML = s.notices.map(n => `<tr><td>${n.date.slice(0, 16).replace("T", " ")}${many() && n.client_id ? `<br><small class="muted">${esc(name[n.client_id] || "")}</small>` : ""}</td>
+          <td>${n.direction === "in" ? "From" : "To"} ${esc(n.counterparty || "—")}</td><td>${esc(n.reference || "")}</td>
+          <td class="num ${n.direction === "in" ? "up" : "down"}">${n.direction === "in" ? "" : "−"}${money(n.amount)}</td>
+          <td>${n.on_statement ? badge("matched", "ok") : badge("not yet", "warn")}</td></tr>`).join("")
+          || empty(5, "No PayShap notifications yet. Connect Gmail on the Import page; banks email one for each PayShap payment.");
+        $("#lines").innerHTML = s.lines.map(t => `<tr><td>${t.date}${many() ? `<br><small class="muted">${esc(name[t.client_id] || "")}</small>` : ""}</td><td>${esc(t.description)}</td>
+          <td class="num ${t.type === "credit" ? "up" : "down"}">${t.type === "credit" ? "" : "−"}${money(t.amount)}</td>
+          <td>${t.notified ? badge("yes", "ok") : ""}</td></tr>`).join("") || empty(4, "No PayShap payments on statements in this period.");
+      } catch (e) { flash(e.message, "err"); }
+    }
+    $("#co").addEventListener("change", load);
+    $("#days").addEventListener("change", load);
+    load();
+  </script>
+</body>
+</html>

@@ -50,11 +50,14 @@ def _flows(db: Session, clients, start: date, end: date):
     ids = [c.id for c in clients]
     if not ids:
         return []
+    from ..services import yoco
+
     out = []
+    with_yoco = yoco.clients_with_yoco(db, ids)
     for t in db.scalars(select(BankTransaction).where(BankTransaction.client_id.in_(ids), BankTransaction.date >= start,
                                                       BankTransaction.date <= end)):
         cat = t.category.name if t.category else ""
-        if INTERNAL.search(cat):
+        if INTERNAL.search(cat) or yoco.is_payout(t, with_yoco):
             continue
         amt = float(t.amount or 0)
         signed = amt if t.transaction_type == "credit" else -amt

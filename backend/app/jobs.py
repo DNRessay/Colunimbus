@@ -73,6 +73,7 @@ def handle(event: dict, local_files=None):
         elif kind in ("ai_categorize", "erpnext_sync"):
             _run_tracked(db, event)
         elif kind == "categorize_all":
+            _gmail_all(db)
             _categorize_all(db)
             try:
                 from .routers.tools import send_monthly
@@ -123,6 +124,20 @@ def _run_tracked(db, event):
         job.conclusion, job.message = "failure", str(e)[:2000]
     job.status = "completed"
     db.commit()
+
+
+def _gmail_all(db):
+    """Nightly: every connected mailbox is searched, and new statements and PayShap notices are read."""
+    from .models import User, UserGmailToken
+    from .services.gmail import Gmail
+
+    for token, user in db.execute(select(UserGmailToken, User).join(User, User.id == UserGmailToken.user_id)
+                                  .where(UserGmailToken.is_connected.is_(True))).all():
+        try:
+            log.info("Gmail for user %s: %s", user.id, Gmail(db, token).fetch_statements(user.practice_id))
+        except Exception:
+            db.rollback()
+            log.exception("Nightly Gmail read failed for user %s", user.id)
 
 
 def _categorize_all(db):

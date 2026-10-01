@@ -4,6 +4,7 @@ import io
 import os
 import time
 from datetime import date
+from decimal import Decimal
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -459,3 +460,99 @@ def test_request_access_emails_admin(monkeypatch):
     assert "already have" in api.post("/api/auth/request-access", json=body).json()["message"] and len(sent) == 1
     r = api.post("/api/auth/request-access", json={**body, "email": "boss@cthai.co.za"})
     assert "already sign up" in r.json()["message"] and len(sent) == 1
+
+
+YOCO_CSV = """Yoco transactions export
+Date,Receipt Number,Type,Status,Amount,Tip,Fee,Card Type
+2026-03-02 10:15:00,R-1001,Sale,Approved,"1,150.00",0.00,26.45,Visa
+2026-03-02 11:00:00,R-1002,Sale,Declined,300.00,0.00,0.00,Mastercard
+2026-03-03 09:30:00,R-1003,Refund,Approved,-150.00,0.00,0.00,Visa
+2026-03-04 08:00:00,P-77,Payout,Paid,973.55,0.00,0.00,
+"""
+
+
+def test_yoco_import_and_payout_not_double_counted(org):
+    from app.services import yoco
+
+    rows = yoco.parse_csv(YOCO_CSV.encode())
+    assert [(r["kind"], float(r["gross"]), float(r["fee"])) for r in rows] == [("sale", 1150.0, 26.45), ("refund", 150.0, 0.0)]
+    with pytest.raises(ValueError):
+        yoco.parse_csv(b"name,colour\na,b\n")
+    # The bank already shows Yoco's payout as money in.
+    upload(org["build"], "Transaction Date,Description,Debits,Credits,Balance\n05/03/2026,YOCO PAYOUT 77,,973.55,\n")
+    period = {"start": "2026-03-01", "end": "2026-03-31", "client_id": org["build_id"]}
+    before = api.get("/api/insights/report", headers=org["auth"], params=period).json()
+    assert before["total_income"] == 973.55
+    r = api.post("/api/imports/yoco", headers=org["build"], files=[("csv_files", ("yoco.csv", YOCO_CSV, "text/csv"))])
+    assert r.status_code == 200 and r.json()["imported"] == 3  # sale, its fee, the refund
+    assert api.post("/api/imports/yoco", headers=org["build"],
+                    files=[("csv_files", ("yoco.csv", YOCO_CSV, "text/csv"))]).json()["imported"] == 0
+    after = api.get("/api/insights/report", headers=org["auth"], params=period).json()
+    # Gross sales are income; the payout is a transfer now; fee and refund are costs.
+    assert after["total_income"] == 1150.0 and after["total_expenses"] == round(26.45 + 150, 2)
+    names = {i["name"] for i in after["income"]}
+    assert "Card Sales (Yoco)" in names and "Yoco Payout" not in names
+
+
+def test_payshap_notices_and_matching(org):
+    from app.db import SessionLocal
+    from app.models import PayShapNotice
+    from app.services import payshap
+
+    n = payshap.parse_notice("PayShap payment received", "You have received R2,500.00 from THABO MOKOENA via PayShap. Ref: INV 204.")
+    assert n == {"direction": "in", "amount": Decimal("2500.00"), "counterparty": "THABO MOKOENA", "reference": "INV 204"}
+    out = payshap.parse_notice("PayShap", "You sent R400.00 to Lerato Plumbing using PayShap ShapID 0821234567@capitec")
+    assert out["direction"] == "out" and out["amount"] == Decimal("400.00") and out["counterparty"] == "Lerato Plumbing"
+    assert payshap.parse_notice("Your statement", "R100.00 debit order") is None
+    assert payshap.is_payshap("PAYSHAP PAYMENT FROM J SMITH") and not payshap.is_payshap("SHOPRITE PURCHASE")
+
+    upload(org["sales"], "Transaction Date,Description,Debits,Credits,Balance\n"
+                         f"{date.today():%d/%m/%Y},PAYSHAP CREDIT THABO,,2500.00,\n")
+    db = SessionLocal()
+    practice_id = api.get("/api/practice", headers=org["auth"]).json()["id"]
+    import datetime as dt
+    db.add_all([PayShapNotice(practice_id=practice_id, client_id=org["sales_id"], gmail_id="ps-1", subject="PayShap",
+                              received_at=dt.datetime.utcnow(), **n),
+                PayShapNotice(practice_id=practice_id, client_id=org["sales_id"], gmail_id="ps-2", subject="PayShap",
+                              received_at=dt.datetime.utcnow(), direction="in", amount=Decimal("99.00"),
+                              counterparty="NOT YET", reference="")])
+    db.commit()
+    db.close()
+    s = api.get("/api/payshap", headers=org["auth"], params={"client_id": org["sales_id"]}).json()
+    assert s["received"] == 2500.0 and s["count"] == 1 and s["lines"][0]["notified"]
+    assert {x["counterparty"]: x["on_statement"] for x in s["notices"]} == {"THABO MOKOENA": True, "NOT YET": False}
+    assert s["pending_in"] == 99.0
+
+
+def test_statement_passwords_and_auto_read(org, monkeypatch):
+    from app.db import SessionLocal
+    from app.models import EmailStatement, UserGmailToken
+    from app.services import gmail as gm
+    from app.services.parsers import parse_text
+
+    r = api.post("/api/imports/passwords", headers=org["auth"], json={"label": "Company reg no", "password": "2025230601"})
+    assert r.status_code == 201 and r.json()[0]["label"] == "Company reg no" and "password" not in r.json()[0]
+    assert gm.bank_for("FNB <statements@fnb.co.za>") == "fnb" and gm.bank_for("Yoco <noreply@yoco.com>") == "yoco"
+    assert parse_text("nothing that looks like a statement", "fnb") == []
+
+    db = SessionLocal()
+    practice_id = api.get("/api/practice", headers=org["auth"]).json()["id"]
+    user_id = api.get("/api/auth/me", headers=org["auth"]).json()["id"]
+    st = EmailStatement(practice_id=practice_id, client_id=org["build_id"], source="gmail", gmail_id="auto-1",
+                        subject="Statement", bank_name="fnb", has_attachment=True, state="new")
+    db.add(st)
+    db.commit()
+    tried = []
+
+    def fake_parse(self, s, password=None):
+        tried.append(self.passwords(s))
+        raise ValueError("Incorrect PDF password: none of the saved passwords opened it")
+    monkeypatch.setattr(gm.Gmail, "parse_pdf_statement", fake_parse)
+    out = gm.Gmail(db, UserGmailToken(user_id=user_id)).auto_read(practice_id)
+    assert out["locked"] == 1 and tried == [["2025230601"]]
+    assert db.get(EmailStatement, st.id).state == "locked"
+    db.delete(db.get(EmailStatement, st.id))
+    db.commit()
+    db.close()
+    pid = api.get("/api/imports/passwords", headers=org["auth"]).json()[0]["id"]
+    assert api.delete(f"/api/imports/passwords/{pid}", headers=org["auth"]).status_code == 204
