@@ -21,6 +21,7 @@ from ..security import (
 )
 from ..services.categorize import seed_categories
 from ..services.mailer import send_mail
+from ..services.signup_lock import signup_problem
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 practice_router = APIRouter(prefix="/api/practice", tags=["practice"])
@@ -39,6 +40,8 @@ def validate_new_user(db: Session, email: str, username: str, password: str):
         errors["email"] = ["Enter a valid email address."]
     elif db.scalar(select(User.id).where(func.lower(User.email) == email)):
         errors["email"] = ["An account with this email already exists."]
+    elif problem := signup_problem(email):
+        errors["email"] = [problem]
     if db.scalar(select(User.id).where(func.lower(User.username) == username.lower())):
         errors["username"] = ["That username is already taken."]
     if problems := password_problems(password, username, email):

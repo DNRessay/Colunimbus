@@ -52,6 +52,8 @@ class Settings:
         self.email_host = _env("EMAIL_HOST")
         self.ses_from = _env("SES_FROM")  # a verified SES identity, e.g. "C.T.H.A.I <noreply@vicinic.co.za>"
         self.ses_region = _env("SES_REGION", "eu-west-1")
+        # Production lock: sign-up only for email domains/addresses verified in SES.
+        self.signup_lock = _flag("SIGNUP_LOCK")
         self.email_port = int(_env("EMAIL_PORT", "587"))
         self.email_user = _env("EMAIL_HOST_USER")
         self.email_password = _env("EMAIL_HOST_PASSWORD")

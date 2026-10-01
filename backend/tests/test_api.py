@@ -413,3 +413,24 @@ def test_vat_payroll_ageing_review_and_monthly_email(org, monkeypatch):
     db.query(ERPNextInvoice).delete()
     db.commit()
     db.close()
+
+
+def test_signup_lock_only_verified_ses_identities(monkeypatch):
+    from app.config import settings
+    from app.services import signup_lock
+
+    monkeypatch.setattr(settings, "signup_lock", True)
+    monkeypatch.setattr(signup_lock, "verified_identities", lambda: {"cthai.co.za", "solo@gmail.com"})
+    body = {"practice_name": "Locked", "first_name": "L", "last_name": "K", "password": "Str0ng-pass!"}
+    r = api.post("/api/auth/register", json={**body, "email": "x@other.co.za", "username": "lockx"})
+    assert r.status_code == 400 and "other.co.za" in r.json()["detail"]["email"][0]
+    r = api.post("/api/auth/register", json={**body, "email": "someone@gmail.com", "username": "lockg"})
+    assert r.status_code == 400
+    assert api.post("/api/auth/register", json={**body, "email": "Boss@CTHAI.co.za", "username": "lockc"}).status_code == 201
+    assert api.post("/api/auth/register", json={**body, "email": "solo@gmail.com", "username": "locks"}).status_code == 201
+
+    def down():
+        raise RuntimeError("no aws")
+    monkeypatch.setattr(signup_lock, "verified_identities", down)
+    r = api.post("/api/auth/register", json={**body, "email": "y@cthai.co.za", "username": "locky"})
+    assert r.status_code == 400 and "right now" in r.json()["detail"]["email"][0]

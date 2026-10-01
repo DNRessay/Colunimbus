@@ -95,7 +95,8 @@ Globals:
         FACEBOOK_APP_ID: !Ref FacebookAppId
         FACEBOOK_APP_SECRET: !Ref FacebookAppSecret
         GROQ_API_KEYS: !Ref GroqApiKeys
-        SES_FROM: "C.T.H.A.I <noreply@vicinic.co.za>"
+        SES_FROM: "C.T.H.A.I <noreply@cthai.co.za>"
+        SIGNUP_LOCK: "true"
         GROQ_MODEL: !Ref GroqModel
         EMAIL_HOST: !Ref EmailHost
         EMAIL_PORT: !Ref EmailPort
@@ -130,7 +131,7 @@ Resources:
             BucketName: !Ref UploadsBucket
         - Statement:
             - Effect: Allow
-              Action: ["ses:SendEmail", "ses:SendRawEmail"]
+              Action: ["ses:SendEmail", "ses:SendRawEmail", "ses:ListEmailIdentities"]
               Resource: "*"
       EventInvokeConfig:
         MaximumRetryAttempts: 0
@@ -158,7 +159,7 @@ Resources:
             FunctionName: !Ref WorkerFunction
         - Statement:
             - Effect: Allow
-              Action: ["ses:SendEmail", "ses:SendRawEmail"]
+              Action: ["ses:SendEmail", "ses:SendRawEmail", "ses:ListEmailIdentities"]
               Resource: "*"
 
   ApiFunctionUrlInvokePermission:
