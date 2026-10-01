@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..deps import current_user, get_db, owner
-from ..models import Practice, User, utcnow
+from ..models import AccessRequest, Practice, User, utcnow
 from ..schemas import (
-    ChangePasswordIn, LoginIn, MeIn, MemberIn, PracticeIn, PracticeOut, RefreshIn, RegisterIn, ResetConfirmIn,
+    AccessRequestIn, ChangePasswordIn, LoginIn, MeIn, MemberIn, PracticeIn, PracticeOut, RefreshIn, RegisterIn, ResetConfirmIn,
     ResetRequestIn, UserOut,
 )
 from ..security import (
@@ -21,6 +21,7 @@ from ..security import (
 )
 from ..services.categorize import seed_categories
 from ..services.mailer import send_mail
+from ..services.signup_lock import signup_problem
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 practice_router = APIRouter(prefix="/api/practice", tags=["practice"])
@@ -39,6 +40,8 @@ def validate_new_user(db: Session, email: str, username: str, password: str):
         errors["email"] = ["Enter a valid email address."]
     elif db.scalar(select(User.id).where(func.lower(User.email) == email)):
         errors["email"] = ["An account with this email already exists."]
+    elif problem := signup_problem(email):
+        errors["email"] = [problem]
     if db.scalar(select(User.id).where(func.lower(User.username) == username.lower())):
         errors["username"] = ["That username is already taken."]
     if problems := password_problems(password, username, email):
@@ -61,6 +64,44 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     return auth_response(user)
+
+
+@router.post("/request-access", status_code=202)
+def request_access(body: AccessRequestIn, db: Session = Depends(get_db)):
+    """Emails the admin so they can verify this domain (or address) in SES, which opens sign-up for it."""
+    from html import escape
+
+    email = body.email.strip().lower()
+    if not EMAIL_RE.match(email):
+        raise HTTPException(400, {"email": ["Enter a valid email address."]})
+    if not signup_problem(email):
+        return {"message": "This email can already sign up. Go ahead and register."}
+    since = utcnow() - timedelta(hours=1)
+    if db.scalar(select(AccessRequest.id).where(AccessRequest.email == email, AccessRequest.created_at > since)):
+        return {"message": "We already have your request. We'll email you once you're in."}
+    if (db.scalar(select(func.count()).select_from(AccessRequest)
+                  .where(AccessRequest.created_at > utcnow() - timedelta(days=1))) or 0) >= 30:
+        raise HTTPException(429, "Too many requests today. Try again tomorrow.")
+    req = AccessRequest(email=email, name=body.name.strip(), company=body.company.strip(), message=body.message.strip())
+    db.add(req)
+    db.commit()
+    if settings.admin_email:
+        domain = email.rsplit("@", 1)[-1]
+        console = f"https://{settings.ses_region}.console.aws.amazon.com/ses/home?region={settings.ses_region}#/identities"
+        rows = [("Name", req.name), ("Email", email), ("Company", req.company or "-"), ("Domain", domain),
+                ("Message", req.message or "-")]
+        text_body = "\n".join(f"{k}: {v}" for k, v in rows) + (
+            f"\n\nTo let them in, verify {domain} (or just {email}) in Amazon SES: {console}\n"
+            "Sign-up opens for them within 10 minutes of verification.")
+        html = ("<h2 style=\"color:#0b1f4d\">C.T.H.A.I access request</h2><table cellpadding=\"6\">"
+                + "".join(f"<tr><td><b>{k}</b></td><td>{escape(v)}</td></tr>" for k, v in rows)
+                + f"</table><p>To let them in, verify <b>{escape(domain)}</b> (or just {escape(email)}) in "
+                  f"<a href=\"{console}\">Amazon SES</a>. Sign-up opens for them within 10 minutes.</p>")
+        try:
+            send_mail(settings.admin_email, f"Access request: {req.name} ({domain})", text_body, html=html)
+        except Exception:
+            pass  # kept in the table either way
+    return {"message": "Request sent. We'll email you once your organisation is registered."}
 
 
 @router.post("/login")

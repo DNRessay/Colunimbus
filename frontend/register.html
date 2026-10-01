@@ -27,7 +27,18 @@
         <div class="field"><label>Password</label><input name="password" type="password" required minlength="8" autocomplete="new-password" /></div>
         <button type="submit" style="width:100%">Register</button>
       </form>
-      <p class="muted" style="font-size:0.85rem">Joining an existing organisation? Ask its owner to add you under Settings. · <a href="/login.html">Log in</a></p>
+      <div id="access" hidden>
+        <h2 style="margin-top:1.25rem">Request access</h2>
+        <p class="muted">Sign-up is open to registered organisations only. Send a request and we'll email you once yours is added.</p>
+        <form id="access-form">
+          <div class="field"><label>Your name</label><input name="name" required /></div>
+          <div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email" /></div>
+          <div class="field"><label>Company</label><input name="company" /></div>
+          <div class="field"><label>Message (optional)</label><textarea name="message" rows="3" maxlength="2000"></textarea></div>
+          <button type="submit" style="width:100%">Send request</button>
+        </form>
+      </div>
+      <p class="muted" style="font-size:0.85rem"><a href="#" id="show-access">Request access</a> · Joining an existing organisation? Ask its owner to add you under Settings. · <a href="/login.html">Log in</a></p>
     </div>
   </main>
   <script type="module">
@@ -39,7 +50,25 @@
         const r = await api.register(d);
         tokens.set(r.access, r.refresh);
         location.href = "/companies.html?first=1";
-      } catch (e) { flash(e.message, "err"); }
+      } catch (e) {
+        flash(e.message, "err");
+        if (/isn't registered/.test(e.message)) showAccess(d);
+      }
+    });
+    function showAccess(d = {}) {
+      const f = $("#access-form");
+      f.name.value ||= [d.first_name, d.last_name].filter(Boolean).join(" ");
+      f.email.value ||= d.email || "";
+      f.company.value ||= d.practice_name || "";
+      $("#access").hidden = false;
+      $("#access").scrollIntoView({ behavior: "smooth" });
+    }
+    $("#show-access").addEventListener("click", (e) => { e.preventDefault(); showAccess(Object.fromEntries(new FormData($("#form")))); });
+    onSubmit($("#access-form"), async (d) => {
+      const r = await api.requestAccess(d);
+      flash(r.message, "ok");
+      $("#access").hidden = true;
+      window.scrollTo({ top: 0, behavior: "smooth" });
     });
   </script>
 </body>

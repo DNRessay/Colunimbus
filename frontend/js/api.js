@@ -94,6 +94,7 @@ const qs = (params = {}) => {
 export const api = {
   // auth + organisation
   register: (b) => post("/api/auth/register", b),
+  requestAccess: (b) => post("/api/auth/request-access", b),
   login: (username, password) => post("/api/auth/login", { username, password }),
   logout: () => post("/api/auth/logout"),
   me: () => get("/api/auth/me"),
