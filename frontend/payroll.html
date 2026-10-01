@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Payroll — C.T.H.A.I</title>
+  <link rel="icon" href="/favicon.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Work+Sans:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <div class="page-head"><h1>Payroll</h1></div>
+    <div id="msg"></div>
+    <div class="card no-print"><div class="row"><select id="co" aria-label="Company"></select>
+      <select id="preset" aria-label="Period"><option value="12">Last 12 months</option><option value="6">Last 6 months</option><option value="fy">This financial year (Mar–Feb)</option></select></div></div>
+    <section class="kpis" id="kpis"></section>
+    <div class="charts">
+      <div class="card"><h3>Payroll per month</h3><div class="legend"><span><i style="background:var(--accent-2)"></i>Salaries &amp; wages</span><span><i style="background:var(--red)"></i>PAYE / UIF / SDL to SARS</span></div>
+        <div class="chart-box"><canvas id="pay-chart" role="img" aria-label="Payroll per month"></canvas></div></div>
+      <div class="card ai-card" id="ai"></div>
+    </div>
+    <div class="card table-wrap"><table><thead><tr><th>Month</th><th class="num">Salaries</th><th class="num">SARS (EMP201)</th><th class="num">Total</th><th>Paid to</th></tr></thead><tbody id="rows"></tbody></table></div>
+    <ul id="notes" class="muted"></ul>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, esc, flash, money, page } from "/js/ui.js";
+    import { aiReview, chart, css, inOutChart, monthLabel, randTick } from "/js/viz.js";
+    const ctx = await page({ needsCompany: false });
+    const active = ctx.companies.filter(c => c.is_active);
+    const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    $("#co").innerHTML = `<option value="">All companies</option>` + active.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    function range() {
+      const now = new Date(), y = now.getFullYear(), m = now.getMonth(), v = $("#preset").value;
+      if (v === "fy") return [new Date(m >= 2 ? y : y - 1, 2, 1), now];
+      return [new Date(y, m - (+v) + 1, 1), now];
+    }
+    ["#co", "#preset"].forEach(s => $(s).addEventListener("change", () => load()));
+    async function load() {
+      const [s, e] = range();
+      try {
+        const p = await api.payroll(iso(s), iso(e), $("#co").value || null);
+        $("#kpis").innerHTML = `<div class="kpi navy"><small>Payroll · period</small><b>${money(p.total)}</b><span class="delta muted">${money(p.average_month)} a month</span></div>
+          <div class="kpi"><small>Salaries &amp; wages</small><b>${money(p.salaries)}</b></div>
+          <div class="kpi red"><small>PAYE / UIF / SDL</small><b>${money(p.statutory)}</b></div>
+          <div class="kpi"><small>Share of costs</small><b>${p.share_of_expenses != null ? p.share_of_expenses + "%" : "—"}</b>
+            <span class="delta muted">${p.share_of_income != null ? p.share_of_income + "% of income" : ""}</span></div>`;
+        chart("#pay-chart", { type: "bar", data: { labels: p.months.map(m => monthLabel(m.month)), datasets: [
+            { label: "Salaries", data: p.months.map(m => m.salaries), backgroundColor: css("--accent-2"), stack: "p", borderRadius: 3, maxBarThickness: 24 },
+            { label: "SARS", data: p.months.map(m => m.statutory), backgroundColor: css("--red"), stack: "p", borderRadius: 3, maxBarThickness: 24 }] },
+          options: { interaction: { mode: "index", intersect: false }, scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, ticks: { callback: randTick } } } } });
+        $("#rows").innerHTML = p.months.map(m => `<tr><td>${m.month}</td><td class="num">${money(m.salaries)}</td><td class="num">${money(m.statutory)}</td>
+          <td class="num"><b>${money(m.total)}</b></td><td><small>${m.payees ? `${m.payees}: ${esc(m.names.join(", "))}` : ""}</small></td></tr>`).join("")
+          || `<tr><td colspan="5" class="muted">No payroll lines in this period.</td></tr>`;
+        $("#notes").innerHTML = p.notes.map(n => `<li>${esc(n)}</li>`).join("");
+      } catch (e) { flash(e.message, "err"); }
+    }
+    aiReview("#ai", () => { const [s, e] = range(); return { topic: "payroll", client_id: +$("#co").value || null, start: iso(s), end: iso(e) }; }, api);
+    load();
+  </script>
+</body>
+</html>

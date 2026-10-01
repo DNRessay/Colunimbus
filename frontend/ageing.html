@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Debtors & creditors — C.T.H.A.I</title>
+  <link rel="icon" href="/favicon.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Work+Sans:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+<body>
+  <nav id="nav"></nav>
+  <main>
+    <div class="page-head"><h1>Debtors &amp; creditors</h1><select id="co" aria-label="Company"></select></div>
+    <div id="msg"></div>
+    <section class="kpis" id="kpis"></section>
+    <div class="charts">
+      <div class="card"><h3>Ageing</h3><div class="legend"><span><i style="background:var(--accent)"></i>Customers owe you</span><span><i style="background:var(--red)"></i>You owe suppliers</span></div>
+        <div class="chart-box short"><canvas id="age-chart" role="img" aria-label="Amounts by days overdue"></canvas></div></div>
+      <div class="card ai-card" id="ai"></div>
+    </div>
+    <div class="rep-grid">
+      <div class="card table-wrap"><h3>Customers to chase</h3><table><thead><tr><th>Customer</th><th class="num">Owes</th><th class="num">Overdue</th><th class="num">Oldest</th></tr></thead><tbody id="deb"></tbody></table></div>
+      <div class="card table-wrap"><h3>Suppliers to pay</h3><table><thead><tr><th>Supplier</th><th class="num">You owe</th><th class="num">Overdue</th><th class="num">Oldest</th></tr></thead><tbody id="cred"></tbody></table></div>
+    </div>
+    <ul id="notes" class="muted"></ul>
+  </main>
+  <script type="module">
+    import { api } from "/js/api.js";
+    import { $, esc, flash, money, page } from "/js/ui.js";
+    import { aiReview, chart, css, inOutChart, monthLabel, randTick } from "/js/viz.js";
+    const ctx = await page({ needsCompany: false });
+    const active = ctx.companies.filter(c => c.is_active);
+    const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    $("#co").innerHTML = `<option value="">All companies</option>` + active.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    $("#co").addEventListener("change", () => load());
+    const LABELS = { current: "Not due", "1-30": "1–30 days", "31-60": "31–60", "61-90": "61–90", "90+": "90+ days" };
+    const list = (ps) => ps.map(p => `<tr><td>${esc(p.name)}<br><small class="muted">${p.invoices} invoice(s)</small></td><td class="num">${money(p.total)}</td>
+      <td class="num ${p.overdue ? "neg" : ""}">${money(p.overdue)}</td><td class="num">${p.oldest_days ? p.oldest_days + " days" : "—"}</td></tr>`).join("")
+      || `<tr><td colspan="4" class="muted">Nothing outstanding.</td></tr>`;
+    async function load() {
+      try {
+        const a = await api.ageing($("#co").value || null), d = a.debtors, c = a.creditors;
+        $("#kpis").innerHTML = `<div class="kpi"><small>Customers owe you</small><b>${money(d.total)}</b><span class="delta down">${money(d.overdue)} overdue</span></div>
+          <div class="kpi red"><small>You owe suppliers</small><b>${money(c.total)}</b><span class="delta down">${money(c.overdue)} overdue</span></div>
+          <div class="kpi navy"><small>Net (owed to you − owed by you)</small><b class="${d.total - c.total < 0 ? "down" : "up"}">${money(d.total - c.total)}</b><span class="delta muted">as of ${a.as_of}</span></div>`;
+        const keys = Object.keys(LABELS);
+        chart("#age-chart", { type: "bar", data: { labels: keys.map(k => LABELS[k]), datasets: [
+            { label: "Customers owe", data: keys.map(k => d.buckets[k]), backgroundColor: css("--accent"), borderRadius: 4, maxBarThickness: 26 },
+            { label: "You owe", data: keys.map(k => c.buckets[k]), backgroundColor: css("--red"), borderRadius: 4, maxBarThickness: 26 }] },
+          options: { interaction: { mode: "index", intersect: false }, scales: { x: { grid: { display: false } }, y: { ticks: { callback: randTick } } } } });
+        $("#deb").innerHTML = list(d.parties); $("#cred").innerHTML = list(c.parties);
+        $("#notes").innerHTML = a.notes.map(n => `<li>${esc(n)} ${n.includes("Sync") ? '<a href="/erp-invoices.html">Invoices →</a>' : ""}</li>`).join("");
+      } catch (e) { flash(e.message, "err"); }
+    }
+    aiReview("#ai", () => ({ topic: "ageing", client_id: +$("#co").value || null }), api);
+    load();
+  </script>
+</body>
+</html>

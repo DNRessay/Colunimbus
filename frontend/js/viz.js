@@ -70,3 +70,20 @@ export function md(src) {
   }
   return html;
 }
+
+// "AI review" box: Groq looks at the numbers on this page (cached for the same numbers).
+export function aiReview(boxSel, payload, api) {
+  const box = document.querySelector(boxSel);
+  const LV = { high: "risk", medium: "books", low: "grow" };
+  box.innerHTML = `<div class="ai-head"><h3><span class="cl-icon" aria-hidden="true">i</span> AI review</h3>
+    <button type="button" class="small secondary ai-run">Review with AI</button></div><p class="muted">Groq checks these numbers for risks and what to do next.</p>`;
+  box.querySelector(".ai-run").addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    box.querySelector("p").textContent = "Reviewing…";
+    try {
+      const r = await api.review(payload());
+      box.querySelector("p").outerHTML = `<ol class="ai-list">${r.items.map(i => `<li><span class="kind ${LV[i.level]}">${i.level}</span>
+        <strong>${esc(i.title)}</strong><br>${esc(i.detail)}</li>`).join("")}</ol><p class="muted"><small>Groq${r.cached ? " (saved answer)" : ""}. Not accounting or tax advice.</small></p>`;
+    } catch (err) { box.querySelector("p").textContent = err.message; e.target.disabled = false; }
+  });
+}

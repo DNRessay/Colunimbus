@@ -95,6 +95,7 @@ Globals:
         FACEBOOK_APP_ID: !Ref FacebookAppId
         FACEBOOK_APP_SECRET: !Ref FacebookAppSecret
         GROQ_API_KEYS: !Ref GroqApiKeys
+        SES_FROM: "C.T.H.A.I <noreply@vicinic.co.za>"
         GROQ_MODEL: !Ref GroqModel
         EMAIL_HOST: !Ref EmailHost
         EMAIL_PORT: !Ref EmailPort
@@ -127,6 +128,10 @@ Resources:
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref UploadsBucket
+        - Statement:
+            - Effect: Allow
+              Action: ["ses:SendEmail", "ses:SendRawEmail"]
+              Resource: "*"
       EventInvokeConfig:
         MaximumRetryAttempts: 0
       Events:
@@ -151,6 +156,10 @@ Resources:
             BucketName: !Ref UploadsBucket
         - LambdaInvokePolicy:
             FunctionName: !Ref WorkerFunction
+        - Statement:
+            - Effect: Allow
+              Action: ["ses:SendEmail", "ses:SendRawEmail"]
+              Resource: "*"
 
   ApiFunctionUrlInvokePermission:
     Type: AWS::Lambda::Permission

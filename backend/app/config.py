@@ -50,6 +50,8 @@ class Settings:
         self.facebook_app_secret = _env("FACEBOOK_APP_SECRET")
 
         self.email_host = _env("EMAIL_HOST")
+        self.ses_from = _env("SES_FROM")  # a verified SES identity, e.g. "C.T.H.A.I <noreply@vicinic.co.za>"
+        self.ses_region = _env("SES_REGION", "eu-west-1")
         self.email_port = int(_env("EMAIL_PORT", "587"))
         self.email_user = _env("EMAIL_HOST_USER")
         self.email_password = _env("EMAIL_HOST_PASSWORD")

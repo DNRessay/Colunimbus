@@ -28,6 +28,8 @@
         <button type="button" class="secondary" id="print">Print / save PDF</button>
       </div>
       <p class="muted" style="margin:0.5rem 0 0">Profit &amp; loss and cash flow from categorised bank transactions. Transfers between your own companies are left out.</p>
+      <div class="row" style="margin-top:0.6rem"><label class="check" style="margin:0"><input type="checkbox" id="monthly" /> Email me a management report on the 1st of every month</label>
+        <button type="button" class="secondary small" id="send-now">Send me one now</button><small class="muted" id="monthly-note"></small></div>
     </div>
     <article class="report-doc" id="doc"></article>
   </main>
@@ -78,6 +80,14 @@
       } catch (e) { flash(e.message, "err"); }
     }
     preset(); make();
+    const note = (m) => { $("#monthly-note").textContent = m.enabled ? `On: goes to ${m.to}${m.last_month_sent ? ` (last: ${m.last_month_sent})` : ""}` : ""; };
+    api.monthlyEmail().then(m => { $("#monthly").checked = m.enabled; note(m); }).catch(() => {});
+    $("#monthly").addEventListener("change", async (e) => { try { note(await api.setMonthlyEmail(e.target.checked)); flash(e.target.checked ? "Monthly report switched on." : "Monthly report switched off."); } catch (err) { flash(err.message, "err"); } });
+    $("#send-now").addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      try { const r = await api.sendMonthlyNow(); flash(`Sent "${r.subject}" to ${r.sent_to}.`); } catch (err) { flash(err.message, "err"); }
+      e.target.disabled = false;
+    });
   </script>
 </body>
 </html>
