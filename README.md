@@ -109,3 +109,7 @@ Set the stack's `FrontendUrl` to the Pages URL.
 | `EMAIL_*`, `DEFAULT_FROM_EMAIL` | SMTP for password-reset mails. When unset, mails are only logged |
 
 Limits: request bodies to a Function URL max out at about 6 MB, so upload large PDF batches in chunks.
+
+## License
+
+Proprietary. Copyright (c) 2026 VICINIC (Pty) Ltd. All rights reserved. Used by partner CT Holdings and Investments (Pty) Ltd under the licence in [LICENSE](LICENSE).
