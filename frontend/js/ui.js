@@ -86,6 +86,7 @@ const LINKS = [
   ["/categories.html", "Categories", true, "◈"],
   ["/imports.html", "Import", true, "⇩"],
   ["/statements.html", "Statements", true, "✉"],
+  ["/payshap.html", "PayShap", false, "⚡"],
   ["/reconciliation.html", "Reconciliation", true, "✓"],
   ["ERPNext"],
   ["/erpnext.html", "ERPNext sync", true, "⟳"],

@@ -41,8 +41,11 @@ def _lines(db: Session, clients, start: date, end: date):
     ids = [c.id for c in clients]
     if not ids:
         return []
-    return list(db.scalars(select(BankTransaction).where(BankTransaction.client_id.in_(ids), BankTransaction.date >= start,
-                                                         BankTransaction.date <= end)))
+    from ..services import yoco
+
+    with_yoco = yoco.clients_with_yoco(db, ids)
+    return [t for t in db.scalars(select(BankTransaction).where(BankTransaction.client_id.in_(ids), BankTransaction.date >= start,
+                                                                BankTransaction.date <= end)) if not yoco.is_payout(t, with_yoco)]
 
 
 def _period(start: str, end: str):
@@ -205,7 +208,9 @@ class AIReview(Base):
 
 TOPICS = {"vat": "a draft VAT 201 return: check categories' VAT treatment, missing invoices, unusual input/output ratios",
           "payroll": "payroll costs: affordability against income, trends, statutory (PAYE/UIF/SDL) payments that look missing",
-          "ageing": "debtors and creditors ageing: collection risk, who to chase first, supplier payments falling overdue"}
+          "ageing": "debtors and creditors ageing: collection risk, who to chase first, supplier payments falling overdue",
+          "report": "a profit and loss management report for the period: profitability and margin, cost drivers, "
+                    "monthly cash-flow trend, bank fees, and the most useful actions for next month"}
 
 
 class ReviewIn(BaseModel):
@@ -227,6 +232,11 @@ def review(body: ReviewIn, user: User = Depends(current_user), db: Session = Dep
         data = payroll_data(db, user, body.client_id, *_period(body.start, body.end))
         for m in data["months"]:
             m.pop("names", None)  # payee names stay here
+    elif body.topic == "report":
+        from .insights import report as pl_report
+
+        data = pl_report(body.start, body.end, body.client_id, user, db)
+        data.pop("generated_at", None)
     else:
         data = ageing_data(db, user, body.client_id)
     blob = json.dumps(data, sort_keys=True, default=str)

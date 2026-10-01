@@ -5,15 +5,16 @@ from typing import Optional
 import jwt
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy import delete, select
+from pydantic import BaseModel
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..deps import Ctx, client_ctx, current_user, get_db, get_owned
 from ..jobs import start_pdf_import
-from ..models import BankAccount, EmailStatement, PDFImportJob, User, UserGmailToken
+from ..models import BankAccount, EmailStatement, PDFImportJob, StatementPassword, User, UserGmailToken
 from ..security import make_token, read_token, seal
-from ..services import gmail
+from ..services import gmail, yoco
 from ..services.imports import save_csv_rows, upload_statement
 from ..services.parsers import CSV_TEMPLATE, parse_csv
 
@@ -78,14 +79,47 @@ def oauth_callback(request: Request, code: str = "", state: str = "", db: Sessio
 @router.post("/gmail/fetch")
 def fetch_from_gmail(user: User = Depends(current_user), db: Session = Depends(get_db)):
     try:
-        imported, skipped = gmail.Gmail(db, connected_token(db, user)).fetch_statements(user.practice_id)
+        r = gmail.Gmail(db, connected_token(db, user)).fetch_statements(user.practice_id)
     except HTTPException:
         raise
     except Exception as e:
         log.exception("Gmail fetch failed")
         raise HTTPException(502, f"Import failed: {e}")
-    return {"message": f"Found {imported} new statement email(s) ({skipped} already imported).",
-            "imported": imported, "skipped": skipped}
+    msg = (f"Found {r['imported']} new statement email(s); read {r['parsed']} ({r['transactions']} transactions)."
+           + (f" {r['locked']} need a statement password." if r["locked"] else "")
+           + (f" {r['payshap']} PayShap notification(s) caught." if r["payshap"] else ""))
+    return {"message": msg, **r}
+
+
+# ── Statement passwords (sealed; tried on every Gmail statement) ───────────
+
+class PasswordIn(BaseModel):
+    label: str = ""
+    password: str
+
+
+@router.get("/passwords")
+def list_passwords(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return [{"id": p.id, "label": p.label or "Password", "added": p.created_at.date().isoformat()}
+            for p in db.scalars(select(StatementPassword).where(StatementPassword.practice_id == user.practice_id))]
+
+
+@router.post("/passwords", status_code=201)
+def add_password(body: PasswordIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if not body.password.strip():
+        raise HTTPException(400, "Enter the password.")
+    db.add(StatementPassword(practice_id=user.practice_id, label=body.label.strip()[:100], secret=seal(body.password.strip())))
+    # Locked statements get another go with the new password.
+    db.execute(update(EmailStatement).where(EmailStatement.practice_id == user.practice_id, EmailStatement.state == "error",
+                                            EmailStatement.error_message.ilike("%password%")).values(state="locked"))
+    db.commit()
+    return list_passwords(user, db)
+
+
+@router.delete("/passwords/{pw_id}", status_code=204)
+def delete_password(pw_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    db.delete(get_owned(db, StatementPassword, pw_id, user))
+    db.commit()
 
 
 @router.post("/statements/{st_id}/parse")
@@ -154,6 +188,25 @@ async def upload_csv(csv_files: list[UploadFile] = File(...), bank_account_id: O
         raise HTTPException(400, "; ".join(errors))
     return {"message": f"Imported {total_imported} transactions ({total_skipped} duplicates skipped).",
             "imported": total_imported, "skipped": total_skipped, "errors": errors}
+
+
+@router.post("/yoco")
+async def upload_yoco(csv_files: list[UploadFile] = File(...), ctx: Ctx = Depends(client_ctx), db: Session = Depends(get_db)):
+    saved = skipped = 0
+    for f in csv_files:
+        try:
+            rows = yoco.parse_csv(await _read(f, ".csv"))
+        except ValueError as e:
+            raise HTTPException(400, f"{f.filename}: {e}")
+        st = upload_statement(ctx.client, f"Yoco: {f.filename}", bank_name="yoco", has_attachment=True, state="parsed")
+        db.add(st)
+        db.flush()
+        a, b = yoco.import_rows(db, ctx.client, rows, st.id)
+        st.transaction_count = a
+        db.commit()
+        saved, skipped = saved + a, skipped + b
+    return {"message": f"Imported {saved} Yoco lines ({skipped} already in). Yoco payouts into the bank now count as transfers, "
+                       "so sales aren't counted twice.", "imported": saved, "skipped": skipped}
 
 
 @router.get("/csv-template")

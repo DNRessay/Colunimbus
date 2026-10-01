@@ -69,6 +69,7 @@
             <div class="kpi red"><small>Bank fees</small><b>${money(r.bank_fees)}</b></div>
           </section>
           ${r.notes.length ? `<section><h2>Notes</h2><ul>${r.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul></section>` : ""}
+          <section id="rep-ai"><h2>AI insights</h2><p class="muted">Reading the numbers…</p></section>
           <section class="rep-grid"><div><h2>Income</h2>${lines(r.income, r.total_income, "up")}</div>
             <div><h2>Expenses</h2>${lines(r.expenses, r.total_expenses, "down")}</div></section>
           <section><h2>Cash flow by month</h2><div class="chart-box short"><canvas id="rep-io" role="img" aria-label="Money in and out per month"></canvas></div>
@@ -77,7 +78,17 @@
               <td class="num ${m.net < 0 ? "neg" : ""}">${money(m.net)}</td></tr>`).join("")}</tbody></table></section>
           <p class="muted"><small>From bank transactions in C.T.H.A.I. A management report, not audited financial statements.</small></p>`;
         inOutChart("#rep-io", r.months.map(m => m.month), r.months.map(m => m.in), r.months.map(m => m.out));
+        insights(r);
       } catch (e) { flash(e.message, "err"); }
+    }
+    async function insights(r) {
+      const box = $("#rep-ai");
+      if (!r.months.length) { box.remove(); return; }
+      try {
+        const a = await api.review({ topic: "report", client_id: +$("#scope").value || null, start: r.period.start, end: r.period.end });
+        box.innerHTML = `<h2>AI insights</h2><ol class="ai-list">${a.items.map(i => `<li><span class="kind ${{ high: "risk", medium: "books", low: "grow" }[i.level]}">${i.level}</span>
+          <strong>${esc(i.title)}</strong><br>${esc(i.detail)}</li>`).join("")}</ol><p class="muted"><small>AI-generated from the figures above. Not accounting or tax advice.</small></p>`;
+      } catch (e) { box.innerHTML = `<h2>AI insights</h2><p class="muted">${esc(e.message)}</p>`; }
     }
     preset(); make();
     const note = (m) => { $("#monthly-note").textContent = m.enabled ? `On: goes to ${m.to}${m.last_month_sent ? ` (last: ${m.last_month_sent})` : ""}` : ""; };
