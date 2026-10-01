@@ -401,6 +401,10 @@ def test_vat_payroll_ageing_review_and_monthly_email(org, monkeypatch):
     assert r["items"][0]["title"] == "Chase ACME" and not r["cached"]
     assert api.post("/api/tools/review", headers=org["auth"], json={"topic": "ageing"}).json()["cached"] and len(calls) == 1
     assert api.post("/api/tools/review", headers=org["auth"], json={"topic": "nope"}).status_code == 400
+    period = {"start": f"{today.year - 1}-01-01", "end": today.isoformat()}
+    r = api.post("/api/tools/review", headers=org["auth"], json={"topic": "report", **period}).json()
+    assert r["items"] and '"total_income"' in calls[-1] and "generated_at" not in calls[-1]
+    assert api.post("/api/tools/review", headers=org["auth"], json={"topic": "report", **period}).json()["cached"]
 
     sent = []
     import app.services.mailer as mailer
