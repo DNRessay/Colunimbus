@@ -54,6 +54,7 @@ class Settings:
         self.ses_region = _env("SES_REGION", "eu-west-1")
         # Production lock: sign-up only for email domains/addresses verified in SES.
         self.signup_lock = _flag("SIGNUP_LOCK")
+        self.admin_email = _env("ADMIN_EMAIL")  # gets "request access" emails
         self.email_port = int(_env("EMAIL_PORT", "587"))
         self.email_user = _env("EMAIL_HOST_USER")
         self.email_password = _env("EMAIL_HOST_PASSWORD")

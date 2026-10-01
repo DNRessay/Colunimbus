@@ -407,3 +407,15 @@ class Job(Base):
     result: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = updated()
+
+
+class AccessRequest(Base):
+    """Someone whose email domain isn't registered asking to be let in (emailed to the admin)."""
+
+    __tablename__ = "access_requests"
+    id: Mapped[int] = pk()
+    email: Mapped[str] = text(254)
+    name: Mapped[str] = text(200)
+    company: Mapped[str] = text(200)
+    message: Mapped[str] = text()
+    created_at: Mapped[datetime] = created()

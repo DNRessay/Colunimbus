@@ -434,3 +434,24 @@ def test_signup_lock_only_verified_ses_identities(monkeypatch):
     monkeypatch.setattr(signup_lock, "verified_identities", down)
     r = api.post("/api/auth/register", json={**body, "email": "y@cthai.co.za", "username": "locky"})
     assert r.status_code == 400 and "right now" in r.json()["detail"]["email"][0]
+
+
+def test_request_access_emails_admin(monkeypatch):
+    from app.config import settings
+    from app.routers import auth
+    from app.services import signup_lock
+
+    sent = []
+    monkeypatch.setattr(settings, "signup_lock", True)
+    monkeypatch.setattr(settings, "admin_email", "admin@cthai.co.za")
+    monkeypatch.setattr(signup_lock, "verified_identities", lambda: {"cthai.co.za"})
+    monkeypatch.setattr(auth, "send_mail", lambda to, subject, body, html=None: sent.append((to, subject, body, html)))
+    body = {"name": "Thabo <b>N</b>", "email": "thabo@newco.co.za", "company": "NewCo", "message": "Please add us"}
+    r = api.post("/api/auth/request-access", json=body)
+    assert r.status_code == 202 and "Request sent" in r.json()["message"]
+    to, subject, text_body, html = sent[0]
+    assert to == "admin@cthai.co.za" and "newco.co.za" in subject and "Please add us" in text_body
+    assert "&lt;b&gt;" in html
+    assert "already have" in api.post("/api/auth/request-access", json=body).json()["message"] and len(sent) == 1
+    r = api.post("/api/auth/request-access", json={**body, "email": "boss@cthai.co.za"})
+    assert "already sign up" in r.json()["message"] and len(sent) == 1

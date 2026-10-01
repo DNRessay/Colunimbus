@@ -97,6 +97,7 @@ Globals:
         GROQ_API_KEYS: !Ref GroqApiKeys
         SES_FROM: "C.T.H.A.I <noreply@cthai.co.za>"
         SIGNUP_LOCK: "true"
+        ADMIN_EMAIL: "mmehgoss@gmail.com"
         GROQ_MODEL: !Ref GroqModel
         EMAIL_HOST: !Ref EmailHost
         EMAIL_PORT: !Ref EmailPort
