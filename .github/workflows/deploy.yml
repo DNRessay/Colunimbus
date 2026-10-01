@@ -14,7 +14,9 @@ env:
   AWS_REGION: eu-west-1
   STACK: colunimbus-api
   PAGES_PROJECT: colunimbus
-  CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'sale-boss.co.za' }}
+  # Main address (reset links, sign-in return) and other addresses that serve the same site.
+  CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'app.cthai.co.za' }}
+  EXTRA_DOMAINS: ${{ vars.EXTRA_DOMAINS || 'sale-boss.co.za' }}
 
 jobs:
   test:
@@ -91,6 +93,12 @@ jobs:
           echo "PAGES_URL=https://$SUB" >> "$GITHUB_ENV"
           echo "FRONTEND_URL=https://${CUSTOM_DOMAIN:-$SUB}" >> "$GITHUB_ENV"
           echo "Frontend: https://${CUSTOM_DOMAIN:-$SUB}"
+          # Attach every address to the Pages project (no-op when already attached). On a zone in this Cloudflare
+          # account the DNS record follows; the status is printed so a missing record shows up in the log.
+          for d in $CUSTOM_DOMAIN ${EXTRA_DOMAINS//,/ }; do
+            curl -s -X POST -H "$auth" -H "Content-Type: application/json" "$api/$PAGES_PROJECT/domains" -d "{\"name\":\"$d\"}" -o /dev/null || true
+            curl -s -H "$auth" "$api/$PAGES_PROJECT/domains/$d" | python -c "import json,sys; r=json.load(sys.stdin).get('result') or {}; print('$d:', r.get('status'), (r.get('verification_data') or {}).get('status'), (r.get('validation_data') or {}).get('status'))" || true
+          done
 
       - name: Build backend
         working-directory: backend
@@ -101,7 +109,7 @@ jobs:
         run: |
           sam package --resolve-s3 --region "$AWS_REGION" --output-template-file packaged.yaml
           origins="$PAGES_URL"
-          [ -n "$CUSTOM_DOMAIN" ] && origins="$origins,https://www.$CUSTOM_DOMAIN"
+          for d in $CUSTOM_DOMAIN ${EXTRA_DOMAINS//,/ }; do origins="$origins,https://$d,https://www.$d"; done
           params=("SecretKey=$SECRET_KEY" "DatabaseUrl=$DATABASE_URL" "FrontendUrl=$FRONTEND_URL" "CorsAllowedOrigins=$origins")
           [ -n "$GOOGLE_CLIENT_ID" ] && params+=("GoogleClientId=$GOOGLE_CLIENT_ID")
           [ -n "$GOOGLE_CLIENT_SECRET" ] && params+=("GoogleClientSecret=$GOOGLE_CLIENT_SECRET")
