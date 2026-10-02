@@ -65,6 +65,25 @@
     </div>
 
     <div class="card">
+      <h3>Connect apps (MCP)</h3>
+      <p class="muted">Let an assistant such as SEMBLANCE read your books. It can only read, never change anything.
+        Give it this address and a key: <code id="mcp-url"></code></p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+        <tbody id="mcp-keys"></tbody>
+      </table></div>
+      <form id="add-mcp-key" class="row" style="margin-top:1rem">
+        <input name="name" value="SEMBLANCE" maxlength="100" aria-label="Key name" />
+        <button type="submit">Create key</button>
+      </form>
+      <div id="new-mcp-key" hidden style="margin-top:1rem">
+        <p>Copy this key now. It won't be shown again.</p>
+        <div class="row"><code id="new-mcp-key-value" style="word-break:break-all"></code>
+          <button type="button" class="secondary small" id="copy-mcp-key">Copy</button></div>
+      </div>
+    </div>
+
+    <div class="card">
       <h3>My account</h3>
       <form id="me">
         <div class="fields">
@@ -87,6 +106,7 @@
   </main>
   <script type="module">
     import { api } from "/js/api.js";
+    import { API_BASE } from "/js/config.js";
     import { $, $$, action, badge, day, empty, esc, flash, onSubmit, page } from "/js/ui.js";
     await page({ needsCompany: false });
 
@@ -109,6 +129,10 @@
 
       $("#team").innerHTML = team.map(u => `<tr><td>${esc(u.first_name)} ${esc(u.last_name)}</td><td>${esc(u.username)}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td>
         <td>${isOwner && u.id !== me.id ? `<button class="secondary small remove" data-id="${u.id}">Remove</button>` : ""}</td></tr>`).join("");
+      const keys = await api.mcpKeys();
+      $("#mcp-keys").innerHTML = keys.map(k => `<tr><td>${esc(k.name)}</td><td><code>${esc(k.prefix)}…</code></td><td>${day(k.created_at)}</td>
+        <td>${day(k.last_used_at) || "Never"}</td><td><button class="secondary small revoke" data-id="${k.id}">Revoke</button></td></tr>`).join("") || empty(5, "No keys yet.");
+      $$(".revoke").forEach(b => action(b, async () => { if (confirm("Revoke this key? Apps using it stop working.")) { await api.deleteMcpKey(b.dataset.id); load(); } }));
       $$(".remove").forEach(b => action(b, async () => { if (confirm("Remove this person's access?")) { await api.removeMember(b.dataset.id); load(); } }));
     }
 
@@ -121,6 +145,14 @@
       load();
     });
     onSubmit($("#add-member"), async (d, e) => { await api.addMember(d); e.target.reset(); flash("Added. Share their username and temporary password with them."); load(); });
+    $("#mcp-url").textContent = `${API_BASE}/mcp`;
+    onSubmit($("#add-mcp-key"), async (d) => {
+      const k = await api.createMcpKey(d.name);
+      $("#new-mcp-key-value").textContent = k.key;
+      $("#new-mcp-key").hidden = false;
+      load();
+    });
+    $("#copy-mcp-key").onclick = async () => { await navigator.clipboard.writeText($("#new-mcp-key-value").textContent); flash("Copied."); };
     onSubmit($("#me"), async (d) => { await api.updateMe(d); flash("Saved."); });
     onSubmit($("#password"), async (d, e) => { flash((await api.changePassword(d)).message); e.target.reset(); });
     load().catch(e => flash(e.message, "err"));

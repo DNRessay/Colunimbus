@@ -447,3 +447,16 @@ class PayShapNotice(Base):
     reference: Mapped[str] = text(200)
     subject: Mapped[str] = text(500)
     transaction_id: Mapped[Optional[int]] = fk("bank_transactions.id", "SET NULL", True)
+
+
+class McpKey(Base):
+    """A key another app (e.g. SEMBLANCE) uses to read this user's books over MCP. Only the hash is stored."""
+
+    __tablename__ = "mcp_keys"
+    id: Mapped[int] = pk()
+    user_id: Mapped[int] = fk("users.id")
+    name: Mapped[str] = text(100)
+    prefix: Mapped[str] = text(16)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_at: Mapped[datetime] = created()
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

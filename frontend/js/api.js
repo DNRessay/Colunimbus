@@ -108,6 +108,9 @@ export const api = {
   updatePractice: (b) => patch("/api/practice", b),
   team: () => get("/api/practice/users"),
   addMember: (b) => post("/api/practice/users", b),
+  mcpKeys: () => get("/api/mcp-keys"),
+  createMcpKey: (name) => post("/api/mcp-keys", { name }),
+  deleteMcpKey: (id) => del(`/api/mcp-keys/${id}`),
   removeMember: (id) => del(`/api/practice/users/${id}`),
 
   // companies

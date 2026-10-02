@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import io
+import json
 import os
 import time
 from datetime import date
@@ -556,3 +557,44 @@ def test_statement_passwords_and_auto_read(org, monkeypatch):
     db.close()
     pid = api.get("/api/imports/passwords", headers=org["auth"]).json()[0]["id"]
     assert api.delete(f"/api/imports/passwords/{pid}", headers=org["auth"]).status_code == 204
+
+
+def test_mcp_keys_and_tools(org):
+    upload(org["sales"], SALES_CSV, "mcp.csv")
+    r = api.post("/api/mcp-keys", headers=org["auth"], json={"name": "SEMBLANCE"})
+    assert r.status_code == 201, r.text
+    key = r.json()["key"]
+    assert key.startswith("colu_") and "key" not in api.get("/api/mcp-keys", headers=org["auth"]).json()[0]
+
+    def rpc(method, params=None, headers=None, mid=1):
+        return api.post("/mcp", headers=headers or {"Authorization": f"Bearer {key}"},
+                        json={"jsonrpc": "2.0", "id": mid, "method": method, "params": params or {}})
+
+    assert rpc("tools/list", headers={"Authorization": "Bearer colu_wrong"}).status_code == 401
+    assert rpc("tools/list", headers=org["auth"]).status_code == 401  # a login token is not an MCP key
+    init = rpc("initialize", {"protocolVersion": "2025-06-18"}).json()["result"]
+    assert init["serverInfo"]["name"] == "colunimbus" and init["capabilities"]["tools"]
+    assert api.post("/mcp", headers={"Authorization": f"Bearer {key}"},
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"}).status_code == 202
+    names = {t["name"] for t in rpc("tools/list").json()["result"]["tools"]}
+    assert {"companies", "overview", "report", "transactions", "vat", "payroll", "ageing"} <= names
+
+    def call(name, args=None):
+        res = rpc("tools/call", {"name": name, "arguments": args or {}}).json()["result"]
+        return res, json.loads(res["content"][0]["text"]) if not res.get("isError") else res["content"][0]["text"]
+
+    _, cos = call("companies")
+    assert {c["client"]["name"] for c in cos["companies"]} == {"Sales Co", "Building Co"}
+    _, txns = call("transactions", {"company_id": org["sales_id"], "start": "2025-09-01", "end": "2025-09-30", "search": "checkers"})
+    assert txns["count"] >= 1 and all("checkers" in t["description"].lower() for t in txns["transactions"])
+    res, msg = call("transactions", {})
+    assert res["isError"] and "company_id" in msg
+    _, rep = call("report", {"start": "2025-09-01", "end": "2025-09-30"})
+    assert "notes" in rep
+    res, _ = call("nope")
+    assert res["isError"]
+    assert rpc("bogus/method").json()["error"]["code"] == -32601
+
+    kid = api.get("/api/mcp-keys", headers=org["auth"]).json()[0]["id"]
+    assert api.delete(f"/api/mcp-keys/{kid}", headers=org["auth"]).status_code == 204
+    assert rpc("tools/list").status_code == 401
