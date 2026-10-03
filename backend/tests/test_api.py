@@ -598,3 +598,41 @@ def test_mcp_keys_and_tools(org):
     kid = api.get("/api/mcp-keys", headers=org["auth"]).json()[0]["id"]
     assert api.delete(f"/api/mcp-keys/{kid}", headers=org["auth"]).status_code == 204
     assert rpc("tools/list").status_code == 401
+
+
+def test_claude_custom_connector_sign_in(org):
+    import base64 as b64
+    from urllib.parse import parse_qs, urlparse
+
+    from app import mcp_oauth
+    from app.config import settings
+
+    callback = "https://claude.ai/api/mcp/auth_callback"
+    r = api.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert r.status_code == 401 and "resource_metadata=" in r.headers["www-authenticate"]
+    assert api.get("/.well-known/oauth-protected-resource").json()["resource"].endswith("/mcp")
+    verifier = "v" * 64
+    challenge = b64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+    def sign_in(client_id, password="N3w-pass-word"):
+        params = {"response_type": "code", "client_id": client_id, "redirect_uri": callback, "state": "s",
+                  "code_challenge": challenge, "code_challenge_method": "S256"}
+        assert "Connect" in api.get("/oauth/authorize", params=params).text
+        return api.post("/oauth/authorize", data={**params, "username": "charlie", "password": password}, follow_redirects=False)
+
+    reg = api.post("/oauth/register", json={"client_name": "Claude", "redirect_uris": [callback]}).json()
+    assert sign_in(reg["client_id"], "nope").status_code == 401
+    code = parse_qs(urlparse(sign_in(reg["client_id"]).headers["location"]).query)["code"][0]
+    key = api.post("/oauth/token", data={"grant_type": "authorization_code", "code": code, "client_id": reg["client_id"],
+                                         "redirect_uri": callback, "code_verifier": verifier}).json()["access_token"]
+    r = api.post("/mcp", headers={"Authorization": f"Bearer {key}"}, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert r.status_code == 200 and r.json()["result"]["tools"]
+    assert any(k["name"] == "Claude (connector)" for k in api.get("/api/mcp-keys", headers=org["auth"]).json())
+
+    creds = mcp_oauth.own_client("colunimbus", settings.secret_key)
+    assert creds["client_secret"] in api.post("/oauth/client", data={"username": "charlie", "password": "N3w-pass-word"}).text
+    code = parse_qs(urlparse(sign_in(creds["client_id"]).headers["location"]).query)["code"][0]
+    form = {"grant_type": "authorization_code", "code": code, "client_id": creds["client_id"], "redirect_uri": callback,
+            "code_verifier": verifier}
+    assert api.post("/oauth/token", data={**form, "client_secret": "bad"}).status_code == 401
+    assert api.post("/oauth/token", data={**form, "client_secret": creds["client_secret"]}).json()["access_token"].startswith("colu_")

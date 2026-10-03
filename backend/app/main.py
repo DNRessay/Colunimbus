@@ -8,7 +8,7 @@ from mangum import Mangum
 
 from .config import settings
 from .db import init_db
-from .routers import auth, bridge, core, erp_invoices, erpnext, imports, insights, mcp, payshap, reconciliation, tools
+from .routers import auth, bridge, core, erp_invoices, erpnext, imports, insights, mcp, mcp_connect, payshap, reconciliation, tools
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -57,7 +57,7 @@ async def unhandled(request: Request, exc: Exception):
 
 for r in (auth.router, auth.practice_router, auth.social_router, core.router, bridge.router, erpnext.router,
           imports.router, imports.callback_router, reconciliation.router, erp_invoices.router, insights.router, tools.router,
-          payshap.router, mcp.router, mcp.keys_router):
+          payshap.router, mcp.router, mcp.keys_router, mcp_connect.router):
     app.include_router(r)
 
 

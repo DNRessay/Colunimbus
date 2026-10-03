@@ -1,12 +1,13 @@
 # Read-only Model Context Protocol endpoint, so assistants like SEMBLANCE can answer questions about the books.
-# Streamable HTTP, stateless JSON replies (fits Lambda): POST /mcp with a JSON-RPC message and a bearer key.
+# Streamable HTTP, stateless JSON replies (fits Lambda): POST /mcp with a JSON-RPC message and a bearer key —
+# or add the URL as a custom connector in Claude and sign in (mcp_connect.py), which makes the key for you.
 import hashlib
 import json
 import secrets
 from datetime import date, timedelta
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
@@ -218,11 +219,14 @@ def _handle(db: Session, user: User, msg: dict):
 
 
 @router.post("/mcp")
-def mcp(payload: Any = Body(...), authorization: str = Header(""), db: Session = Depends(get_db)):
+def mcp(request: Request, payload: Any = Body(...), authorization: str = Header(""), db: Session = Depends(get_db)):
     user = _key_user(db, authorization)
     if not user:
+        # The header points MCP clients (e.g. Claude's custom connectors) at the sign-in (mcp_connect.py).
+        from ..mcp_oauth import www_authenticate
+        from .mcp_connect import base_url
         return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "Invalid or missing MCP key."}},
-                            status_code=401, headers={"WWW-Authenticate": "Bearer"})
+                            status_code=401, headers={"WWW-Authenticate": www_authenticate(base_url(request))})
     if isinstance(payload, list):
         replies = [r for r in (_handle(db, user, m) for m in payload if isinstance(m, dict)) if r]
         return JSONResponse(replies) if replies else Response(status_code=202)
